@@ -1,9 +1,8 @@
 // ---------------------------------------------------------
-// 【第一区】系统补丁 (必须在最前面)
+// 【第一区】暴力兼容补丁 (必须最先定义)
 // ---------------------------------------------------------
 #include <cstdlib>
 
-// 拦截 Windows 内存函数
 #undef _aligned_malloc
 #undef _aligned_free
 #define _aligned_malloc(size, align) aligned_alloc(align, size)
@@ -11,38 +10,33 @@
 #define MemAlloc_AllocAlignedFileLine(size, align, file, line) aligned_alloc(align, size)
 
 // ---------------------------------------------------------
-// 【第二区】关键定义 (必须在 extension.h 之前)
+// 【第二区】核心头文件
 // ---------------------------------------------------------
-// 1. 必须先引入 memalloc.h 以定义 IMemAlloc
+#include "extension.h"
+
+// 显式引入 SDK 的 platform.h，确保 PLATFORM_INTERFACE 被定义
+#include <tier0/platform.h>
 #include <tier0/memalloc.h>
 
-// 2. 必须在此处显式声明 g_pMemAlloc
-// 这样后续 extension.h 里的 SDK 头文件(如 icvar.h)才能找到它
+// 声明全局内存分配器
 extern IMemAlloc *g_pMemAlloc;
 
 // ---------------------------------------------------------
-// 【第三区】SourceMod 扩展头文件
+// 【第三区】SDK 接口
 // ---------------------------------------------------------
-#include "extension.h" 
-
-// ---------------------------------------------------------
-// 【第四区】SDK 接口与补丁
-// ---------------------------------------------------------
-// 引入 IHandleEntity
 #include <ihandleentity.h>
-
-// 定义假类以欺骗 SDK 头文件 (解决 CBasePlayer 未知类型报错)
+// 假类定义，解决 SDK 头文件中的未知类型引用
 class CBaseEntity : public IHandleEntity {};
 class CBasePlayer : public CBaseEntity {};
 
-// 解决 enum 前置声明报错
+// 手动定义枚举
 enum PLAYER_ANIM { 
     PLAYER_IDLE, PLAYER_WALK, PLAYER_JUMP, PLAYER_SUPERJUMP, PLAYER_DIE, PLAYER_ATTACK1 
 };
 
-// 引入 SDK 其他接口
+// 引入其他 SDK 头文件
 #include <engine/IEngineTrace.h>
-#include <ispatialpartition.h> // 必须引入，否则 ITraceFilter 报错
+#include <ispatialpartition.h>
 #include <igamemovement.h>
 #include <tier0/vprof.h>
 
@@ -50,7 +44,7 @@ enum PLAYER_ANIM {
 #include "simple_detour.h"
 
 // ---------------------------------------------------------
-// 全局变量与常量
+// 常量与全局变量
 // ---------------------------------------------------------
 #ifndef MAXPLAYERS
 #define MAXPLAYERS 65
@@ -59,11 +53,14 @@ enum PLAYER_ANIM {
 #define MAX_CLIP_PLANES 5
 #endif
 
-// 定义扩展实例 (解决 SMEXT_LINK 报错)
+// 扩展实例
 MomSurfFixExt g_MomSurfFixExt;
 
 // 接口指针
 IEngineTrace *enginetrace = nullptr;
+
+// 工厂函数定义
+typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
 
 ConVar g_cvRampBumpCount("momsurffix_ramp_bumpcount", "8", FCVAR_NOTIFY);
 ConVar g_cvRampInitialRetraceLength("momsurffix_ramp_retrace_length", "0.2", FCVAR_NOTIFY);
@@ -118,7 +115,6 @@ void Manual_TracePlayerBBox(IGameMovement *pGM, const Vector &start, const Vecto
     Ray_t ray;
     ray.Init(start, end, mins, maxs);
 
-    // 强转为 IHandleEntity*
     IHandleEntity *playerEntity = (IHandleEntity *)pGM->GetMovingPlayer();
     
     CTraceFilterSimple traceFilter(playerEntity, collisionGroup);
@@ -178,10 +174,12 @@ bool IsValidMovementTrace(const CGameTrace &tr)
 // ---------------------------------------------------------
 // Detour 回调
 // ---------------------------------------------------------
-typedef int (*TryPlayerMove_t)(CGameMovement *, Vector *, CGameTrace *, float);
+// 使用 void* 替代 CGameMovement* 避免 incomplete type 错误
+typedef int (*TryPlayerMove_t)(void *, Vector *, CGameTrace *, float);
 
-int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
+int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
 {
+    // 指针运算需要 uintptr_t
     void *pPlayer = *(void **)((uintptr_t)pThis + g_off_Player);
     CMoveData *mv = *(CMoveData **)((uintptr_t)pThis + g_off_MV);
 
@@ -367,11 +365,18 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 获取 Trace 接口 (Valve 接口)
-    // 使用 smutils (SourceMod Global Utils) 获取 Interface
-    if (!smutils->GetInterface(ENGINE_TRACE_INTERFACE_VERSION, (void **)&enginetrace))
+    // 手动查找 CreateInterface 接口
+    // 因为是扩展，我们直接从 gamedata 里找 CreateInterface 的地址，然后调用它
+    void *pCreateInterface = nullptr;
+    if (conf->GetMemSig("CreateInterface", &pCreateInterface) && pCreateInterface)
     {
-        snprintf(error, maxlength, "Could not find interface: %s", ENGINE_TRACE_INTERFACE_VERSION);
+        CreateInterfaceFn factory = (CreateInterfaceFn)pCreateInterface;
+        enginetrace = (IEngineTrace *)factory(INTERFACEVERSION_ENGINETRACE_SERVER, nullptr);
+    }
+
+    if (!enginetrace)
+    {
+        snprintf(error, maxlength, "Could not find interface: %s", INTERFACEVERSION_ENGINETRACE_SERVER);
         gameconfs->CloseGameConfigFile(conf);
         return false;
     }
