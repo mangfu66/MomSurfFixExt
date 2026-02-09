@@ -1,9 +1,11 @@
 #include "extension.h"
-#include <IGameMovement.h>
-#include <CBase.h>
+// 【关键修复】改为小写文件名，匹配 Linux 文件系统
+#include <igamemovement.h>
+#include <cbase.h> 
+
 #include <tier0/vprof.h>
 #include "smsdk_config.h"
-#include "simple_detour.h" // 引入我们自己的 Detour
+#include "simple_detour.h"
 
 // ---------------------------------------------------------
 // 1. 辅助工具
@@ -42,7 +44,6 @@ int g_off_MV = -1;
 int g_off_VecVelocity = -1; 
 int g_off_VecAbsOrigin = -1;
 
-// 使用我们的 SimpleDetour
 CSimpleDetour *g_pDetour = nullptr;
 
 static CGameTrace g_TempTraces[MAXPLAYERS + 1];
@@ -55,11 +56,8 @@ void FindValidPlane(CGameMovement *pThis, CBasePlayer *pPlayer, const Vector &or
 bool IsValidMovementTrace(const CGameTrace &tr);
 
 // ---------------------------------------------------------
-// 4. Detour 回调 (静态函数，模拟 ThisCall)
+// 4. Detour 回调
 // ---------------------------------------------------------
-
-// 定义原函数类型：void TryPlayerMove(CGameMovement*, Vector*, CGameTrace*, float)
-// 注意：GameData 里的签名有 float 参数，所以这里必须加上
 typedef int (*TryPlayerMove_t)(CGameMovement *, Vector *, CGameTrace *, float);
 
 int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
@@ -68,6 +66,7 @@ int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *p
     CBasePlayer *pPlayer = *(CBasePlayer **)((uintptr_t)pThis + g_off_Player);
     CMoveData *mv = *(CMoveData **)((uintptr_t)pThis + g_off_MV);
 
+    // 获取 Trampoline (原函数)
     TryPlayerMove_t Original = (TryPlayerMove_t)g_pDetour->GetTrampoline();
 
     if (!pPlayer || !mv || !Original)
@@ -89,13 +88,10 @@ int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *p
     
     if (vel.LengthSqr() < 0.000001f)
     {
-        // 调用原函数或直接返回，这里简单返回0模拟
-        // 实际上如果有问题，最好调用 trampoline
         return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft); 
     }
 
-    // 使用传入的 time_left 或者全局 frametime
-    float time_left = flTimeLeft; // 使用 hook 到的参数
+    float time_left = flTimeLeft;
     int blocked = 0;
     int numbumps = g_cvRampBumpCount.GetInt();
     int numplanes = 0;
@@ -103,7 +99,7 @@ int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *p
     Vector valid_plane;
     bool has_valid_plane = false;
 
-    // --- 核心修复逻辑开始 ---
+    // --- 核心逻辑 ---
     for (int bumpcount = 0; bumpcount < numbumps; bumpcount++)
     {
         if (vel.LengthSqr() == 0.0f) break;
@@ -190,7 +186,6 @@ int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *p
             break;
         }
     }
-    // --- 核心修复逻辑结束 ---
 
     *pVel = vel;
     *pOrigin = origin;
@@ -272,7 +267,6 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 获取 TryPlayerMove 的地址
     void *pTryPlayerMoveAddr = nullptr;
     if (!conf->GetMemSig("CGameMovement::TryPlayerMove", &pTryPlayerMoveAddr) || !pTryPlayerMoveAddr)
     {
@@ -281,7 +275,6 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 创建并启用 Hook
     g_pDetour = new CSimpleDetour(pTryPlayerMoveAddr, (void *)Detour_TryPlayerMove);
     if (!g_pDetour->Enable())
     {
