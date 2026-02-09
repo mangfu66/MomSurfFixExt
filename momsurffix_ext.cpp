@@ -1,8 +1,9 @@
 // ---------------------------------------------------------
-// 【Region 1】Compatibility Patches (MUST BE FIRST)
+// 【第一区】系统补丁 (必须在最前面)
 // ---------------------------------------------------------
-#include <cstdlib> 
+#include <cstdlib>
 
+// 拦截 Windows 内存函数
 #undef _aligned_malloc
 #undef _aligned_free
 #define _aligned_malloc(size, align) aligned_alloc(align, size)
@@ -10,38 +11,46 @@
 #define MemAlloc_AllocAlignedFileLine(size, align, file, line) aligned_alloc(align, size)
 
 // ---------------------------------------------------------
-// 【Region 2】SDK & SourceMod
+// 【第二区】关键定义 (必须在 extension.h 之前)
 // ---------------------------------------------------------
-#include "extension.h"
-
-// Define IMemAlloc interface locally if needed, or rely on tier0
+// 1. 必须先引入 memalloc.h 以定义 IMemAlloc
 #include <tier0/memalloc.h>
-// Explicitly define the global pointer to satisfy linker/compiler
+
+// 2. 必须在此处显式声明 g_pMemAlloc
+// 这样后续 extension.h 里的 SDK 头文件(如 icvar.h)才能找到它
 extern IMemAlloc *g_pMemAlloc;
 
-// --- CRITICAL FIX: Fake CBasePlayer ---
-// The SDK headers use CBasePlayer but we don't want to include server.h/cbase.h
-// We define it as an empty class inheriting from IHandleEntity so pointers work.
+// ---------------------------------------------------------
+// 【第三区】SourceMod 扩展头文件
+// ---------------------------------------------------------
+#include "extension.h" 
+
+// ---------------------------------------------------------
+// 【第四区】SDK 接口与补丁
+// ---------------------------------------------------------
+// 引入 IHandleEntity
 #include <ihandleentity.h>
+
+// 定义假类以欺骗 SDK 头文件 (解决 CBasePlayer 未知类型报错)
 class CBaseEntity : public IHandleEntity {};
 class CBasePlayer : public CBaseEntity {};
 
-// --- CRITICAL FIX: Enum Forward Declaration ---
+// 解决 enum 前置声明报错
 enum PLAYER_ANIM { 
     PLAYER_IDLE, PLAYER_WALK, PLAYER_JUMP, PLAYER_SUPERJUMP, PLAYER_DIE, PLAYER_ATTACK1 
 };
 
-// Include Interfaces
+// 引入 SDK 其他接口
 #include <engine/IEngineTrace.h>
-#include <ispatialpartition.h> 
+#include <ispatialpartition.h> // 必须引入，否则 ITraceFilter 报错
 #include <igamemovement.h>
-
 #include <tier0/vprof.h>
+
 #include "smsdk_config.h"
 #include "simple_detour.h"
 
 // ---------------------------------------------------------
-// Constants & Globals
+// 全局变量与常量
 // ---------------------------------------------------------
 #ifndef MAXPLAYERS
 #define MAXPLAYERS 65
@@ -50,16 +59,17 @@ enum PLAYER_ANIM {
 #define MAX_CLIP_PLANES 5
 #endif
 
-// Interface Pointers
+// 定义扩展实例 (解决 SMEXT_LINK 报错)
+MomSurfFixExt g_MomSurfFixExt;
+
+// 接口指针
 IEngineTrace *enginetrace = nullptr;
 
-// ConVars
 ConVar g_cvRampBumpCount("momsurffix_ramp_bumpcount", "8", FCVAR_NOTIFY);
 ConVar g_cvRampInitialRetraceLength("momsurffix_ramp_retrace_length", "0.2", FCVAR_NOTIFY);
 ConVar g_cvNoclipWorkaround("momsurffix_enable_noclip_workaround", "1", FCVAR_NOTIFY);
 ConVar g_cvBounce("sv_bounce", "0");
 
-// Offsets
 int g_off_Player = -1;
 int g_off_MV = -1;
 int g_off_VecVelocity = -1; 
@@ -72,7 +82,7 @@ static CGameTrace g_TempTraces[MAXPLAYERS + 1];
 static Vector g_TempPlanes[MAX_CLIP_PLANES];
 
 // ---------------------------------------------------------
-// Helper Classes
+// 辅助类
 // ---------------------------------------------------------
 class CTraceFilterSimple : public ITraceFilter
 {
@@ -96,9 +106,8 @@ private:
 };
 
 // ---------------------------------------------------------
-// Helper Functions
+// 辅助函数
 // ---------------------------------------------------------
-
 void Manual_TracePlayerBBox(IGameMovement *pGM, const Vector &start, const Vector &end, unsigned int fMask, int collisionGroup, CGameTrace &pm)
 {
     if (!enginetrace) return;
@@ -109,7 +118,7 @@ void Manual_TracePlayerBBox(IGameMovement *pGM, const Vector &start, const Vecto
     Ray_t ray;
     ray.Init(start, end, mins, maxs);
 
-    // GetMovingPlayer returns CBasePlayer*, which we defined as inheriting IHandleEntity
+    // 强转为 IHandleEntity*
     IHandleEntity *playerEntity = (IHandleEntity *)pGM->GetMovingPlayer();
     
     CTraceFilterSimple traceFilter(playerEntity, collisionGroup);
@@ -167,7 +176,7 @@ bool IsValidMovementTrace(const CGameTrace &tr)
 }
 
 // ---------------------------------------------------------
-// Detour Callback
+// Detour 回调
 // ---------------------------------------------------------
 typedef int (*TryPlayerMove_t)(CGameMovement *, Vector *, CGameTrace *, float);
 
@@ -209,7 +218,6 @@ int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *p
     bool has_valid_plane = false;
     int blocked = 0;
 
-    // Cast to Interface
     IGameMovement *pGM = (IGameMovement *)pThis;
 
     for (int bumpcount = 0; bumpcount < numbumps; bumpcount++)
@@ -246,7 +254,6 @@ int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *p
         g_TempPlanes[numplanes] = pm.plane.normal;
         numplanes++;
 
-        // Ground Check
         unsigned long hGroundEntity = *(unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
         bool bIsAirborne = (hGroundEntity == 0xFFFFFFFF); 
 
@@ -313,7 +320,7 @@ int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *p
 }
 
 // ---------------------------------------------------------
-// Lifecycle
+// 生命周期
 // ---------------------------------------------------------
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
@@ -360,8 +367,14 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // Get Engine Trace Interface
-    SM_GET_IFACE(ENGINE_TRACE_INTERFACE_VERSION, enginetrace);
+    // 获取 Trace 接口 (Valve 接口)
+    // 使用 smutils (SourceMod Global Utils) 获取 Interface
+    if (!smutils->GetInterface(ENGINE_TRACE_INTERFACE_VERSION, (void **)&enginetrace))
+    {
+        snprintf(error, maxlength, "Could not find interface: %s", ENGINE_TRACE_INTERFACE_VERSION);
+        gameconfs->CloseGameConfigFile(conf);
+        return false;
+    }
 
     gameconfs->CloseGameConfigFile(conf);
     return true;
