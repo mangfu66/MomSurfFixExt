@@ -1,18 +1,17 @@
 // ============================================================================
-// 【第一区】系统兼容性补丁
+// 【第一区】系统环境重构 (必须置顶)
 // ============================================================================
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
 
-// 1. 拦截 Windows 内存函数
+// 1. 内存函数映射
 #undef _aligned_malloc
 #undef _aligned_free
 #define _aligned_malloc(size, align) aligned_alloc(align, size)
 #define _aligned_free free
-#define MemAlloc_AllocAlignedFileLine(size, align, file, line) aligned_alloc(align, size)
 
-// 2. 强制定义 abstract_class
+// 2. 关键宏定义
 #ifndef abstract_class
     #define abstract_class class
 #endif
@@ -24,39 +23,56 @@
 #endif
 
 // ============================================================================
-// 【第二区】手动构造 SDK 核心 (绕过损坏的头文件)
+// 【第二区】完整伪造 SDK 内存管理层
 // ============================================================================
-#include <tier0/platform.h>
-
-// 【核弹级修复】手动定义 IMemAlloc 类
-// 并且定义 TIER0_MEMALLOC_H 宏，阻止编译器去加载官方那个有问题的 memalloc.h
+// 我们定义 TIER0_MEMALLOC_H 宏，欺骗编译器说 "memalloc.h 已经加载过了"
+// 从而彻底阻止编译器去读取那个充满错误的官方头文件
 #ifndef TIER0_MEMALLOC_H
 #define TIER0_MEMALLOC_H
 
+#include <tier0/platform.h>
+
+// 1. 手动定义 IMemAlloc 接口 (满足 icvar.h 需求)
 abstract_class IMemAlloc
 {
 public:
-    // 这里的虚函数顺序并不重要，只要编译能过，运行时链接的是引擎的 vtable
-    // 为了兼容 icvar.h 的调用 g_pMemAlloc->Free(p)，我们需要 Free 函数
     virtual void *Alloc(size_t nSize, const char *pFileName = 0, int nLine = 0) = 0;
     virtual void *Realloc(void *pMem, size_t nSize, const char *pFileName = 0, int nLine = 0) = 0;
     virtual void Free(void *pMem, const char *pFileName = 0, int nLine = 0) = 0;
     virtual void *Expand_NoLongerSupported(void *pMem, size_t nSize, const char *pFileName = 0, int nLine = 0) = 0;
-    
-    // 某些版本的 SDK 可能使用不同的重载，这里一并补全，确保万无一失
     virtual void *Alloc(size_t nSize) = 0;
     virtual void Free(void *pMem) = 0;
 };
 
-// 显式声明全局变量
+// 2. 显式声明全局变量
 extern IMemAlloc *g_pMemAlloc;
+
+// 3. 【关键补全】手动实现 vector.h 依赖的辅助函数
+// 这是上一版报错 "undeclared identifier MemAlloc_AllocAligned" 的原因
+inline void *MemAlloc_AllocAligned(size_t size, size_t align) 
+{ 
+    return aligned_alloc(align, size); 
+}
+
+// 支持默认参数，同时解决 1个参数和 3个参数的调用
+inline void MemAlloc_FreeAligned(void *p, const char *pFileName = nullptr, int nLine = 0) 
+{ 
+    free(p); 
+}
+
+// 4. 【关键补全】手动定义 utlmemory.h 依赖的宏
+// 这是上一版报错 "undeclared identifier MEM_ALLOC_CREDIT_CLASS" 的原因
+#define MEM_ALLOC_CREDIT_CLASS()
+
+// 5. 补全其他可能用到的宏
+#define MemAlloc_AllocAlignedFileLine(size, align, file, line) aligned_alloc(align, size)
 
 #endif // TIER0_MEMALLOC_H
 
 // ============================================================================
 // 【第三区】SourceMod 扩展入口
 // ============================================================================
-// 现在 IMemAlloc 已经有了，extension.h 里的 icvar.h 不会再报错了
+// 现在内存层已经完美伪造，extension.h 可以安全通过
 #include "extension.h"
 
 // ============================================================================
@@ -64,7 +80,7 @@ extern IMemAlloc *g_pMemAlloc;
 // ============================================================================
 #include <ihandleentity.h>
 
-// 定义假类以欺骗 SDK 头文件
+// 假类定义
 class CBaseEntity : public IHandleEntity {};
 class CBasePlayer : public CBaseEntity {};
 
@@ -72,7 +88,6 @@ enum PLAYER_ANIM {
     PLAYER_IDLE, PLAYER_WALK, PLAYER_JUMP, PLAYER_SUPERJUMP, PLAYER_DIE, PLAYER_ATTACK1 
 };
 
-// 引入业务接口
 #include <engine/IEngineTrace.h>
 #include <ispatialpartition.h> 
 #include <igamemovement.h>
@@ -91,13 +106,9 @@ enum PLAYER_ANIM {
 #define MAX_CLIP_PLANES 5
 #endif
 
-// 扩展实例
 MomSurfFixExt g_MomSurfFixExt;
-
-// 接口指针
 IEngineTrace *enginetrace = nullptr;
 
-// 工厂函数类型
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
 
 ConVar g_cvRampBumpCount("momsurffix_ramp_bumpcount", "8", FCVAR_NOTIFY);
