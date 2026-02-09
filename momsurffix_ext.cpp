@@ -7,11 +7,12 @@
 // 这一步必须在 memalloc.h 之前，因为 memalloc.h 的内联函数会用到它们
 #undef _aligned_malloc
 #undef _aligned_free
+// Linux 的 aligned_alloc 参数是 (alignment, size)，与 Windows 相反
 #define _aligned_malloc(size, align) aligned_alloc(align, size)
 #define _aligned_free free
 
 // ⚠️ 注意：绝对不要在这里定义 MemAlloc_AllocAlignedFileLine
-// 否则会破坏 memalloc.h 里的函数声明
+// 否则会破坏 memalloc.h 里的函数声明，导致 IMemAlloc 无法定义！
 
 // ---------------------------------------------------------
 // 【第二区】SDK 基础定义 (步骤 2)
@@ -66,7 +67,10 @@ enum PLAYER_ANIM {
 #define MAX_CLIP_PLANES 5
 #endif
 
+// 扩展实例
 MomSurfFixExt g_MomSurfFixExt;
+
+// 接口指针
 IEngineTrace *enginetrace = nullptr;
 
 // CreateInterface 定义
@@ -348,65 +352,4 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    if (!conf->GetOffset("CBasePlayer::m_hGroundEntity", &g_off_GroundEntity))
-    {
-         snprintf(error, maxlength, "Missing 'CBasePlayer::m_hGroundEntity' in gamedata.");
-         gameconfs->CloseGameConfigFile(conf);
-         return false;
-    }
-
-    void *pTryPlayerMoveAddr = nullptr;
-    if (!conf->GetMemSig("CGameMovement::TryPlayerMove", &pTryPlayerMoveAddr) || !pTryPlayerMoveAddr)
-    {
-        snprintf(error, maxlength, "Failed to find signature for TryPlayerMove.");
-        gameconfs->CloseGameConfigFile(conf);
-        return false;
-    }
-
-    g_pDetour = new CSimpleDetour(pTryPlayerMoveAddr, (void *)Detour_TryPlayerMove);
-    if (!g_pDetour->Enable())
-    {
-        snprintf(error, maxlength, "Failed to enable detour.");
-        delete g_pDetour;
-        g_pDetour = nullptr;
-        gameconfs->CloseGameConfigFile(conf);
-        return false;
-    }
-
-    void *pCreateInterface = nullptr;
-    if (conf->GetMemSig("CreateInterface", &pCreateInterface) && pCreateInterface)
-    {
-        CreateInterfaceFn factory = (CreateInterfaceFn)pCreateInterface;
-        enginetrace = (IEngineTrace *)factory(INTERFACEVERSION_ENGINETRACE_SERVER, nullptr);
-    }
-
-    if (!enginetrace)
-    {
-        snprintf(error, maxlength, "Could not find interface: %s", INTERFACEVERSION_ENGINETRACE_SERVER);
-        gameconfs->CloseGameConfigFile(conf);
-        return false;
-    }
-
-    gameconfs->CloseGameConfigFile(conf);
-    return true;
-}
-
-void MomSurfFixExt::SDK_OnUnload()
-{
-    if (g_pDetour)
-    {
-        delete g_pDetour;
-        g_pDetour = nullptr;
-    }
-}
-
-void MomSurfFixExt::SDK_OnAllLoaded()
-{
-}
-
-bool MomSurfFixExt::QueryRunning(char *error, size_t maxlength)
-{
-    return true;
-}
-
-SMEXT_LINK(&g_MomSurfFixExt);
+    if (!conf->GetOffset("CBasePlayer::m_hGroundEntity", &g_off_
