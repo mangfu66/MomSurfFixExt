@@ -10,18 +10,26 @@ sm_path = builder.options.sm_path
 mms_path = builder.options.mms_path
 hl2sdk_path = builder.options.hl2sdk_path
 
+# ---------------------------------------------------------
+# 1. 头文件路径
+# ---------------------------------------------------------
 library.compiler.includes += [
     builder.sourcePath,
     os.path.join(sm_path, 'public'),
     os.path.join(sm_path, 'public/extensions'),
     os.path.join(sm_path, 'public/sourcepawn'),
     os.path.join(sm_path, 'sourcepawn/include'),
+    # AMTL 支持
     os.path.join(sm_path, 'public/amtl'),
     os.path.join(sm_path, 'public/amtl/amtl'),
     os.path.join(sm_path, 'third_party/amtl'),
     os.path.join(sm_path, 'third_party/amtl/amtl'),
+    # 【修复】直接加入 CDetour 路径，防止找不到头文件
+    os.path.join(sm_path, 'public/CDetour'),
+    # Metamod
     os.path.join(mms_path, 'core'),
     os.path.join(mms_path, 'core/sourcehook'),
+    # HL2SDK
     os.path.join(hl2sdk_path, 'public'),
     os.path.join(hl2sdk_path, 'public/engine'),
     os.path.join(hl2sdk_path, 'public/mathlib'),
@@ -30,6 +38,9 @@ library.compiler.includes += [
     os.path.join(hl2sdk_path, 'public/tier1'),
 ]
 
+# ---------------------------------------------------------
+# 2. 宏定义 (Defines)
+# ---------------------------------------------------------
 library.compiler.defines += [
     'SOURCEMOD_BUILD',
     'HAVE_STRING_H',
@@ -39,18 +50,29 @@ library.compiler.defines += [
     'LINUX',
     'POSIX',
     '_POSIX',
-    '_NATIVE_WCHAR_T_DEFINED', # 防止重定义错误
+    '_NATIVE_WCHAR_T_DEFINED',
+    # 【关键修复】将 register 关键字定义为空，修复 C++17 下 HL2SDK mathlib 报错
+    'register=',
 ]
 
+# ---------------------------------------------------------
+# 3. 编译器标志 (CXX Flags)
+# ---------------------------------------------------------
 library.compiler.cxxflags += [
-    '-std=c++17',             # 必须: 支持 std::make_unique
+    '-std=c++17',             # 必须: 支持 SM 1.12+
     '-fno-threadsafe-statics',
     '-fvisibility=hidden',
-    '-fshort-wchar',          # 推荐: CS:GO 使用 2字节 wchar
+    '-fshort-wchar',          # 必须: CS:GO 兼容
+    # 忽略一堆烦人的警告
     '-Wno-deprecated-declarations',
     '-Wno-macro-redefined',
+    '-Wno-implicit-const-int-float-conversion', # 忽略 mathlib 的转换警告
+    '-Wno-register',          # 双重保险忽略 register 警告
 ]
 
+# ---------------------------------------------------------
+# 4. 链接设置
+# ---------------------------------------------------------
 library.compiler.linkflags += ['-m32', '-lm', '-ldl']
 
 library.compiler.postlink += [
