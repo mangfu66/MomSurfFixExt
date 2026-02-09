@@ -29,6 +29,8 @@
 #define SMEXT_ENABLE_TRANSLATOR
 #define SMEXT_ENABLE_ROOTCONSOLEMENU
 
-#define SMEXT_CONF_METAMOD  // 启用 Metamod 支持
+#define SOURCE_ENGINE SE_EPISODEONE
+#define SMEXT_CONF_METAMOD
+#define SMEXT_LINK extern "C" __attribute__((visibility("default")))
 
 #endif
