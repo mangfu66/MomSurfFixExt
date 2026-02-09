@@ -1,40 +1,38 @@
 // ============================================================================
-// 【第一区】系统兼容性补丁 (必须放在最最最前面)
+// 【第一区】系统兼容性补丁 (必须在最前面)
 // ============================================================================
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
 
-// 1. 拦截并替换 Windows 专用内存函数
-// 这一步必须在引入任何 SDK 头文件之前完成
+// 1. 拦截 Windows 内存函数
 #undef _aligned_malloc
 #undef _aligned_free
 #define _aligned_malloc(size, align) aligned_alloc(align, size)
 #define _aligned_free free
-// 修复 vector.h 可能用到的函数映射
 #define MemAlloc_AllocAlignedFileLine(size, align, file, line) aligned_alloc(align, size)
 
-// 2. 解决 SDK 旧语法兼容性 (重要！)
-// 如果不定义这个，platform.h 在 Linux 下可能无法正确定义 abstract_class
+// 2. 强制定义 abstract_class，防止 SDK 头文件解析失败
 #ifndef abstract_class
     #define abstract_class class
 #endif
 
 // ============================================================================
-// 【第二区】SDK 核心前置定义 (解决依赖死锁)
+// 【第二区】SDK 核心前置定义
 // ============================================================================
-// 1. 必须先引入 platform 和 memalloc 以获取 IMemAlloc 类型定义
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
 
-// 2. 【关键】显式声明全局内存分配器变量
-// 这样稍后引入 extension.h 时，里面的 icvar.h 就能找到 g_pMemAlloc，不再报错
+// 【关键修复】手动前置声明 IMemAlloc
+// 就算 memalloc.h 解析有问题，这行代码也能保证 g_pMemAlloc 的声明不报错
+class IMemAlloc;
+
+// 显式声明全局内存分配器变量
 extern IMemAlloc *g_pMemAlloc;
 
 // ============================================================================
 // 【第三区】SourceMod 扩展入口
 // ============================================================================
-// 环境已就绪，现在可以安全引入 extension.h 了
 #include "extension.h"
 
 // ============================================================================
@@ -42,18 +40,16 @@ extern IMemAlloc *g_pMemAlloc;
 // ============================================================================
 #include <ihandleentity.h>
 
-// 定义假类以欺骗 SDK 头文件，解决 CBasePlayer 未知类型报错
+// 定义假类以欺骗 SDK 头文件
 class CBaseEntity : public IHandleEntity {};
 class CBasePlayer : public CBaseEntity {};
 
-// 手动定义枚举，解决 forward declaration 报错
 enum PLAYER_ANIM { 
     PLAYER_IDLE, PLAYER_WALK, PLAYER_JUMP, PLAYER_SUPERJUMP, PLAYER_DIE, PLAYER_ATTACK1 
 };
 
-// 引入业务接口
 #include <engine/IEngineTrace.h>
-#include <ispatialpartition.h> // ITraceFilter 定义在此
+#include <ispatialpartition.h> 
 #include <igamemovement.h>
 #include <tier0/vprof.h>
 
@@ -191,7 +187,6 @@ bool IsValidMovementTrace(const CGameTrace &tr)
 // ============================================================================
 // Detour 函数
 // ============================================================================
-// 使用 void* 避免类型依赖问题
 typedef int (*TryPlayerMove_t)(void *, Vector *, CGameTrace *, float);
 
 int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
@@ -334,7 +329,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 }
 
 // ============================================================================
-// 扩展加载/卸载
+// 生命周期
 // ============================================================================
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
@@ -381,8 +376,6 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 获取 Trace 接口
-    // 使用手动工厂查找，是最稳妥的获取引擎接口方式
     void *pCreateInterface = nullptr;
     if (conf->GetMemSig("CreateInterface", &pCreateInterface) && pCreateInterface)
     {
