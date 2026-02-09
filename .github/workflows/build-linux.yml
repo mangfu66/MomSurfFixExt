@@ -28,11 +28,11 @@ jobs:
 
     - name: Clone SDKs
       run: |
-        git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.12-dev sourcemod
+        git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.12-dev sourcemod || (sleep 5; git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.12-dev sourcemod)  # 重试克隆
         cd sourcemod && git submodule update --init --recursive && cd ..
-        git clone --recursive https://github.com/alliedmodders/metamod-source -b 1.12-dev mmsource
+        git clone --recursive https://github.com/alliedmodders/metamod-source -b 1.12-dev mmsource || (sleep 5; git clone --recursive https://github.com/alliedmodders/metamod-source -b 1.12-dev mmsource)
         cd mmsource && git submodule update --init --recursive && cd ..
-        git clone --recursive https://github.com/alliedmodders/hl2sdk -b sdk2013 hl2sdk-csgo
+        git clone --recursive https://github.com/alliedmodders/hl2sdk -b sdk2013 hl2sdk-csgo || (sleep 5; git clone --recursive https://github.com/alliedmodders/hl2sdk -b sdk2013 hl2sdk-csgo)
         cd hl2sdk-csgo && git submodule update --init --recursive && cd ..
 
     - name: Configure and Build
