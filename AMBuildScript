@@ -6,31 +6,43 @@ library = cxx.Library('momsurffix_ext.ext')
 
 library.sources += [ 'momsurffix_ext.cpp' ]
 
+# 定义常见的 include 路径
+sm_path = builder.options.sm_path
+mms_path = builder.options.mms_path
+hl2sdk_path = builder.options.hl2sdk_path
+
 library.compiler.includes += [
     builder.sourcePath,
-    os.path.join(builder.options.sm_path, 'public'),
-    os.path.join(builder.options.sm_path, 'public/extensions'),
-    os.path.join(builder.options.sm_path, 'public/sourcepawn'),
-    os.path.join(builder.options.sm_path, 'sourcepawn/include'),
-    os.path.join(builder.options.sm_path, 'public/amtl'),
-    os.path.join(builder.options.mms_path, 'core'),
-    os.path.join(builder.options.mms_path, 'core/sourcehook'), # 确保包含 SourceHook
-    os.path.join(builder.options.hl2sdk_path, 'public'),
-    os.path.join(builder.options.hl2sdk_path, 'public/engine'),
-    os.path.join(builder.options.hl2sdk_path, 'public/mathlib'),
-    os.path.join(builder.options.hl2sdk_path, 'public/vstdlib'),
-    os.path.join(builder.options.hl2sdk_path, 'public/tier0'),
-    os.path.join(builder.options.hl2sdk_path, 'public/tier1'),
+    os.path.join(sm_path, 'public'),
+    os.path.join(sm_path, 'public/extensions'),
+    os.path.join(sm_path, 'public/sourcepawn'),
+    os.path.join(sm_path, 'sourcepawn/include'),
+    # --- 修复核心 ---
+    os.path.join(sm_path, 'public/amtl'),          # 标准路径
+    os.path.join(sm_path, 'public/amtl/amtl'),     # 嵌套路径 (修复你的报错)
+    os.path.join(sm_path, 'third_party/amtl'),     # 备用路径 (新版结构)
+    os.path.join(sm_path, 'third_party/amtl/amtl'),# 备用嵌套
+    # ----------------
+    os.path.join(mms_path, 'core'),
+    os.path.join(mms_path, 'core/sourcehook'),
+    os.path.join(hl2sdk_path, 'public'),
+    os.path.join(hl2sdk_path, 'public/engine'),
+    os.path.join(hl2sdk_path, 'public/mathlib'),
+    os.path.join(hl2sdk_path, 'public/vstdlib'),
+    os.path.join(hl2sdk_path, 'public/tier0'),
+    os.path.join(hl2sdk_path, 'public/tier1'),
 ]
 
 library.compiler.linkflags += ['-m32']
-# 链接必要的静态库
+
+# 链接静态库
 library.compiler.postlink += [
-    os.path.join(builder.options.hl2sdk_path, 'lib/linux/tier1_i486.a'),
-    os.path.join(builder.options.hl2sdk_path, 'lib/linux/mathlib_i486.a'),
-    os.path.join(builder.options.hl2sdk_path, 'lib/linux/interfaces_i486.a'), # 可能需要 interfaces
+    os.path.join(hl2sdk_path, 'lib/linux/tier1_i486.a'),
+    os.path.join(hl2sdk_path, 'lib/linux/mathlib_i486.a'),
+    # os.path.join(hl2sdk_path, 'lib/linux/interfaces_i486.a'), # 如果报错 undefined reference 再解开
 ]
 
-library.compiler.defines += ['SOURCEMOD_BUILD', 'HAVE_STRING_H', 'SE_EPISODEONE', 'COMPILER_GCC'] # 根据 SDK 版本可能需要 SE_ 定义
+# 定义宏
+library.compiler.defines += ['SOURCEMOD_BUILD', 'HAVE_STRING_H', 'SE_EPISODEONE', 'COMPILER_GCC']
 
 builder.Add(library)
