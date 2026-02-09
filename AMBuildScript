@@ -1,28 +1,20 @@
-# AMBuildScript - 定义构建逻辑
-
+# AMBuildScript
 import os
 
-# 检测 C++ 编译器，使用注入的目标架构
 cxx = builder.DetectCxx(target_arch=builder.options.targets)
-
-# 创建动态库目标
 library = cxx.Library('momsurffix_ext.ext')
 
-# 添加源文件
-library.sources += [
-    'momsurffix_ext.cpp',
-]
+library.sources += [ 'momsurffix_ext.cpp' ]
 
-# 添加包括路径，使用注入的选项，并调整 AMTL 路径
 library.compiler.includes += [
-    builder.sourcePath,  # 根目录
+    builder.sourcePath,
     os.path.join(builder.options.sm_path, 'public'),
     os.path.join(builder.options.sm_path, 'public/extensions'),
     os.path.join(builder.options.sm_path, 'public/sourcepawn'),
     os.path.join(builder.options.sm_path, 'sourcepawn/include'),
-    os.path.join(builder.options.sm_path, 'amtl'),  # 调整为 'amtl' 以包含 am-string.h
+    os.path.join(builder.options.sm_path, 'public/amtl'),
     os.path.join(builder.options.mms_path, 'core'),
-    os.path.join(builder.options.mms_path, 'core/sourcehook'),
+    os.path.join(builder.options.mms_path, 'core/sourcehook'), # 确保包含 SourceHook
     os.path.join(builder.options.hl2sdk_path, 'public'),
     os.path.join(builder.options.hl2sdk_path, 'public/engine'),
     os.path.join(builder.options.hl2sdk_path, 'public/mathlib'),
@@ -31,15 +23,14 @@ library.compiler.includes += [
     os.path.join(builder.options.hl2sdk_path, 'public/tier1'),
 ]
 
-# 添加链接标志和库（针对 Linux 32位）
 library.compiler.linkflags += ['-m32']
+# 链接必要的静态库
 library.compiler.postlink += [
     os.path.join(builder.options.hl2sdk_path, 'lib/linux/tier1_i486.a'),
     os.path.join(builder.options.hl2sdk_path, 'lib/linux/mathlib_i486.a'),
+    os.path.join(builder.options.hl2sdk_path, 'lib/linux/interfaces_i486.a'), # 可能需要 interfaces
 ]
 
-# 添加预处理器定义
-library.compiler.defines += ['SOURCEMOD_BUILD', 'HAVE_STRING_H']
+library.compiler.defines += ['SOURCEMOD_BUILD', 'HAVE_STRING_H', 'SE_EPISODEONE', 'COMPILER_GCC'] # 根据 SDK 版本可能需要 SE_ 定义
 
-# 添加到构建图
 builder.Add(library)
