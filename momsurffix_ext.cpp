@@ -1,7 +1,18 @@
 #include "extension.h"
-// 【关键修复】改为小写文件名，匹配 Linux 文件系统
+
+// 【关键修复】必须放在最前面，解决 icvar.h 找不到 g_pMemAlloc 和 aligned_alloc 的问题
+#include <cstdlib>
+#include <tier0/memalloc.h> 
+
+// 【关键修复】前置声明，解决 igamemovement.h 里的 unknown type name 错误
+class CBasePlayer;
+
 #include <igamemovement.h>
-#include <cbase.h> 
+
+// 如果 game/server/cbase.h 冲突太严重，可以注释掉下面这行，改用 reinterpret_cast 强转指针
+// 但为了能调用 pPlayer->entindex()，我们需要它。
+// 如果编译报错说找不到 cbase.h，请尝试改成 "cbase.h"
+#include <cbase.h>
 
 #include <tier0/vprof.h>
 #include "smsdk_config.h"
@@ -66,7 +77,6 @@ int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *p
     CBasePlayer *pPlayer = *(CBasePlayer **)((uintptr_t)pThis + g_off_Player);
     CMoveData *mv = *(CMoveData **)((uintptr_t)pThis + g_off_MV);
 
-    // 获取 Trampoline (原函数)
     TryPlayerMove_t Original = (TryPlayerMove_t)g_pDetour->GetTrampoline();
 
     if (!pPlayer || !mv || !Original)
