@@ -26,9 +26,12 @@ jobs:
         python3 setup.py install --user
         cd ..
 
-    - name: Clone SDKs
+- name: Clone SDKs
       run: |
         git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.12-dev sourcemod
+        cd sourcemod
+        git submodule update --init --recursive
+        cd ..
         git clone --recursive https://github.com/alliedmodders/metamod-source -b 1.12-dev mmsource
         git clone --recursive https://github.com/alliedmodders/hl2sdk -b sdk2013 hl2sdk-csgo
 
