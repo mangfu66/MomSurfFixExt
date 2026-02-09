@@ -1,22 +1,18 @@
 // ============================================================================
-// 【第一区】环境强力补丁 (必须放在最前面)
+// 【第一区】系统兼容性补丁
 // ============================================================================
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
 
-// 1. 解决 Windows/Linux 内存函数差异
-// _aligned_malloc 必须在 SDK 头文件之前定义，因为 SDK 内部的内联函数会用到它
+// 1. 拦截 Windows 内存函数
 #undef _aligned_malloc
 #undef _aligned_free
 #define _aligned_malloc(size, align) aligned_alloc(align, size)
 #define _aligned_free free
+#define MemAlloc_AllocAlignedFileLine(size, align, file, line) aligned_alloc(align, size)
 
-// ⚠️ 修正点：移除了这里的 MemAlloc_AllocAlignedFileLine 定义
-// 把它移到了后面，防止破坏 SDK 头文件原本的声明
-
-// 2. 解决 SDK 旧语法兼容性 (关键修复！)
-// CS:GO SDK 在新版 Linux 编译器下经常漏定义 abstract_class
+// 2. 强制定义 abstract_class
 #ifndef abstract_class
     #define abstract_class class
 #endif
@@ -28,29 +24,39 @@
 #endif
 
 // ============================================================================
-// 【第二区】SDK 核心类型预处理
+// 【第二区】手动构造 SDK 核心 (绕过损坏的头文件)
 // ============================================================================
-// 1. 引入 platform.h
 #include <tier0/platform.h>
 
-// 2. 手动前置声明 IMemAlloc (双重保险)
-class IMemAlloc;
+// 【核弹级修复】手动定义 IMemAlloc 类
+// 并且定义 TIER0_MEMALLOC_H 宏，阻止编译器去加载官方那个有问题的 memalloc.h
+#ifndef TIER0_MEMALLOC_H
+#define TIER0_MEMALLOC_H
 
-// 3. 引入 memalloc.h
-// 此时 MemAlloc_AllocAlignedFileLine 宏还没定义，所以这里的声明能正常通过
-#include <tier0/memalloc.h>
+abstract_class IMemAlloc
+{
+public:
+    // 这里的虚函数顺序并不重要，只要编译能过，运行时链接的是引擎的 vtable
+    // 为了兼容 icvar.h 的调用 g_pMemAlloc->Free(p)，我们需要 Free 函数
+    virtual void *Alloc(size_t nSize, const char *pFileName = 0, int nLine = 0) = 0;
+    virtual void *Realloc(void *pMem, size_t nSize, const char *pFileName = 0, int nLine = 0) = 0;
+    virtual void Free(void *pMem, const char *pFileName = 0, int nLine = 0) = 0;
+    virtual void *Expand_NoLongerSupported(void *pMem, size_t nSize, const char *pFileName = 0, int nLine = 0) = 0;
+    
+    // 某些版本的 SDK 可能使用不同的重载，这里一并补全，确保万无一失
+    virtual void *Alloc(size_t nSize) = 0;
+    virtual void Free(void *pMem) = 0;
+};
 
-// 4. 显式声明全局内存分配器
+// 显式声明全局变量
 extern IMemAlloc *g_pMemAlloc;
 
-// 5. 【关键修正】现在可以安全地定义这个宏了
-// 这样既不会破坏上面的头文件，又能让后续 extension.h 里的 vector.h 正常工作
-#define MemAlloc_AllocAlignedFileLine(size, align, file, line) aligned_alloc(align, size)
+#endif // TIER0_MEMALLOC_H
 
 // ============================================================================
 // 【第三区】SourceMod 扩展入口
 // ============================================================================
-// 环境完美就绪，安全引入扩展头文件
+// 现在 IMemAlloc 已经有了，extension.h 里的 icvar.h 不会再报错了
 #include "extension.h"
 
 // ============================================================================
@@ -58,18 +64,17 @@ extern IMemAlloc *g_pMemAlloc;
 // ============================================================================
 #include <ihandleentity.h>
 
-// 欺骗编译器的假类定义
+// 定义假类以欺骗 SDK 头文件
 class CBaseEntity : public IHandleEntity {};
 class CBasePlayer : public CBaseEntity {};
 
-// 手动定义枚举
 enum PLAYER_ANIM { 
     PLAYER_IDLE, PLAYER_WALK, PLAYER_JUMP, PLAYER_SUPERJUMP, PLAYER_DIE, PLAYER_ATTACK1 
 };
 
 // 引入业务接口
 #include <engine/IEngineTrace.h>
-#include <ispatialpartition.h>
+#include <ispatialpartition.h> 
 #include <igamemovement.h>
 #include <tier0/vprof.h>
 
@@ -207,7 +212,6 @@ bool IsValidMovementTrace(const CGameTrace &tr)
 // ============================================================================
 // Detour 函数
 // ============================================================================
-// 使用 void* 避免类型依赖问题
 typedef int (*TryPlayerMove_t)(void *, Vector *, CGameTrace *, float);
 
 int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
@@ -350,7 +354,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 }
 
 // ============================================================================
-// 扩展加载/卸载
+// 生命周期
 // ============================================================================
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
@@ -397,7 +401,6 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 获取 Trace 接口
     void *pCreateInterface = nullptr;
     if (conf->GetMemSig("CreateInterface", &pCreateInterface) && pCreateInterface)
     {
