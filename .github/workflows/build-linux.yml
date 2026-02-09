@@ -36,14 +36,11 @@ jobs:
       run: |
         mkdir build && cd build
         export PATH=$HOME/.local/bin:$PATH
-        export HL2SDK=/home/runner/work/MomSurfFixExt/MomSurfFixExt/hl2sdk-csgo
-        export MMSOURCE=/home/runner/work/MomSurfFixExt/MomSurfFixExt/mmsource
-        export SOURCEMOD=/home/runner/work/MomSurfFixExt/MomSurfFixExt/sourcemod
-        python3 ../configure.py --sdks=csgo --targets=x86
-        make -j4  # 使用4线程构建
+        python3 ../configure.py --sm-path=/home/runner/work/MomSurfFixExt/MomSurfFixExt/sourcemod --mms-path=/home/runner/work/MomSurfFixExt/MomSurfFixExt/mmsource --hl2sdk-path=/home/runner/work/MomSurfFixExt/MomSurfFixExt/hl2sdk-csgo --sdks=csgo --targets=x86
+        ambuild
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: momsurffix_ext-so
-        path: build/momsurffix_ext.ext.so  # 调整为实际输出路径
+        path: build/package/addons/sourcemod/extensions/momsurffix_ext.ext.so  # 输出路径，根据日志调整
