@@ -1,0 +1,38 @@
+# AMBuildScript - 定义构建逻辑
+
+cxx = builder.DetectCxx()
+
+# 创建共享库目标（SourceMod扩展为动态库）
+library = cxx.Library("momsurffix_ext")
+
+# 添加源文件（调整为您的文件列表）
+library.sources += [
+    'momsurffix_ext.cpp',
+    'extension.h',  # 如果作为源文件编译
+    'smsdk_config.h',
+]
+
+# 添加SourceMod/HL2SDK/MMS特定包括路径（Actions中动态设置）
+library.compiler.includes += [
+    os.path.join(builder.options.sm_path, 'public'),
+    os.path.join(builder.options.sm_path, 'public/extensions'),
+    os.path.join(builder.options.sm_path, 'public/sourcepawn'),
+    os.path.join(builder.options.hl2sdk_path, 'public'),
+    os.path.join(builder.options.hl2sdk_path, 'public/tier0'),
+    os.path.join(builder.options.hl2sdk_path, 'public/tier1'),
+    os.path.join(builder.options.mms_path, 'core'),
+    os.path.join(builder.options.mms_path, 'core/sourcehook'),
+]
+
+# 添加预处理器定义
+library.compiler.defines += [
+    'SOURCEMOD_BUILD',
+    'HAVE_STRING_H',
+    '_LINUX',  # Linux平台
+]
+
+# 添加链接标志（动态库输出）
+library.compiler.postlink += ['-shared']
+
+# 将库添加到构建图
+builder.Add(library)
