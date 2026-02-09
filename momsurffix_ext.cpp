@@ -1,24 +1,30 @@
 #include "extension.h"
 
 // ---------------------------------------------------------
-// 【第一区】系统兼容性补丁 (必须在最前面)
+// 【第一区】暴力兼容补丁 (必须在文件最最最前面)
 // ---------------------------------------------------------
-#include <cstdlib> // aligned_alloc
+#include <cstdlib> // 为了 aligned_alloc
 
-// 修复 Windows -> Linux 内存分配差异
-// 直接在这里定义宏，比在 AMBuildScript 里更稳定
+// 在引入任何 SDK 头文件之前，强制拦截 Windows 内存函数
+// 这样当 SDK 头文件被 extension.h 引入时，它们就已经被替换了
+#undef _aligned_malloc
+#undef _aligned_free
+// 注意：Linux 的 aligned_alloc 参数顺序是 (alignment, size)
 #define _aligned_malloc(size, align) aligned_alloc(align, size)
 #define _aligned_free free
 #define MemAlloc_AllocAlignedFileLine(size, align, file, line) aligned_alloc(align, size)
 
-// 手动声明内存分配器接口，解决 "undeclared identifier g_pMemAlloc"
+// ---------------------------------------------------------
+// 【第二区】SourceMod & SDK
+// ---------------------------------------------------------
+#include "extension.h"
+
+// 引入内存分配器接口 (解决 IMemAlloc unknown type / g_pMemAlloc undeclared)
 #include <tier0/memalloc.h>
+// 显式声明全局变量
 extern IMemAlloc *g_pMemAlloc;
 
-// ---------------------------------------------------------
-// 【第二区】SDK 头文件
-// ---------------------------------------------------------
-// 定义常用常量
+// 常用常量
 #ifndef MAXPLAYERS
 #define MAXPLAYERS 65
 #endif
@@ -31,17 +37,16 @@ enum PLAYER_ANIM {
     PLAYER_IDLE, PLAYER_WALK, PLAYER_JUMP, PLAYER_SUPERJUMP, PLAYER_DIE, PLAYER_ATTACK1 
 };
 
-// 前置声明，欺骗编译器
+// 前置声明
 class CBasePlayer;
 class CBaseEntity;
+class CGameMovement; // 【修复】解决 Detour 函数参数报错
 
-// 引入 IHandleEntity (用于获取实体索引)
+// 引入接口
 #include <ihandleentity.h>
-
-// 【关键修复】引入 Trace 相关定义 (解决 ITraceFilter incomplete type)
+// 【重要修复】必须引入这个头文件，否则 ITraceFilter 会报错 incomplete type
+#include <ispatialpartition.h> 
 #include <engine/IEngineTrace.h>
-
-// 引入 GameMovement
 #include <igamemovement.h>
 
 #include <tier0/vprof.h>
@@ -51,7 +56,6 @@ class CBaseEntity;
 // ---------------------------------------------------------
 // 辅助类
 // ---------------------------------------------------------
-// 现在 ITraceFilter 已经定义了，这里不会报错了
 class CTraceFilterSimple : public ITraceFilter
 {
 public:
@@ -81,7 +85,6 @@ ConVar g_cvRampInitialRetraceLength("momsurffix_ramp_retrace_length", "0.2", FCV
 ConVar g_cvNoclipWorkaround("momsurffix_enable_noclip_workaround", "1", FCVAR_NOTIFY);
 ConVar g_cvBounce("sv_bounce", "0");
 
-// 偏移量
 int g_off_Player = -1;
 int g_off_MV = -1;
 int g_off_VecVelocity = -1; 
@@ -118,7 +121,7 @@ int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *p
 
     VPROF_BUDGET("Momentum_TryPlayerMove", VPROF_BUDGETGROUP_PLAYER);
 
-    // 使用 IHandleEntity 接口获取索引
+    // 获取 client 索引
     int client = ((IHandleEntity *)pPlayer)->GetRefEHandle().GetEntryIndex();
     
     CGameTrace &pm = g_TempTraces[client];
@@ -136,12 +139,12 @@ int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *p
     }
 
     float time_left = flTimeLeft;
-    int blocked = 0;
     int numbumps = g_cvRampBumpCount.GetInt();
     int numplanes = 0;
     bool stuck_on_ramp = false;
     Vector valid_plane;
     bool has_valid_plane = false;
+    int blocked = 0;
 
     for (int bumpcount = 0; bumpcount < numbumps; bumpcount++)
     {
@@ -177,9 +180,9 @@ int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *p
         g_TempPlanes[numplanes] = pm.plane.normal;
         numplanes++;
 
-        // 判断是否在地面的逻辑
+        // 地面检测
         unsigned long hGroundEntity = *(unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
-        bool bIsAirborne = (hGroundEntity == 0xFFFFFFFF); // INVALID_EHANDLE_INDEX
+        bool bIsAirborne = (hGroundEntity == 0xFFFFFFFF); 
 
         if (bumpcount > 0 && bIsAirborne && !IsValidMovementTrace(pm))
         {
@@ -203,12 +206,17 @@ int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *p
         for (int i = 0; i < numplanes; i++)
         {
             Vector new_vel;
-            new_vel = vel - (g_TempPlanes[i] * DotProduct(vel, g_TempPlanes[i]) * 1.0f);
-
-            if (g_TempPlanes[i].normal.z >= 0.7f)
+            // 【重要修复】g_TempPlanes[i] 是 Vector，直接访问 .z，没有 .normal
+            if (g_TempPlanes[i].z >= 0.7f)
             {
                 blocked_planes++;
                 new_vel.Init();
+            }
+            else
+            {
+                // ClipVelocity logic
+                float backoff = DotProduct(vel, g_TempPlanes[i]) * 1.0f;
+                new_vel = vel - (g_TempPlanes[i] * backoff);
             }
 
             if (i == 0)
@@ -261,7 +269,6 @@ void FindValidPlane(CGameMovement *pThis, CBasePlayer *pPlayer, const Vector &or
                 Vector end = origin + (dir * 0.0625f);
 
                 CGameTrace trace;
-                // 强转为 IHandleEntity*
                 CTraceFilterSimple filter((IHandleEntity*)pPlayer, COLLISION_GROUP_PLAYER_MOVEMENT);
                 Ray_t ray;
                 ray.Init(origin, end);
@@ -315,11 +322,8 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // GroundEntity 可能需要在 gamedata 添加，或者我们这里不强制检查（如果没添加，功能会受限）
     if (!conf->GetOffset("CBasePlayer::m_hGroundEntity", &g_off_GroundEntity))
     {
-        // 如果 gamedata 还没更新，你可以临时硬编码一个偏移量测试编译
-        // 但建议去更新 gamedata
          snprintf(error, maxlength, "Missing 'CBasePlayer::m_hGroundEntity' in gamedata.");
          gameconfs->CloseGameConfigFile(conf);
          return false;
