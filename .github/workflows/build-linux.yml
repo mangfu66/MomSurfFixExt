@@ -29,12 +29,11 @@ jobs:
     - name: Clone SDKs
       run: |
         git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.12-dev sourcemod
-        cd sourcemod
-        git submodule update --init --recursive
-        cd ..
+        cd sourcemod && git submodule update --init --recursive && cd ..
         git clone --recursive https://github.com/alliedmodders/metamod-source -b 1.12-dev mmsource
-        # 【关键修改】这里必须是 -b csgo，绝对不能是 sdk2013
-        git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo
+        cd mmsource && git submodule update --init --recursive && cd ..
+        git clone --recursive https://github.com/alliedmodders/hl2sdk -b sdk2013 hl2sdk-csgo
+        cd hl2sdk-csgo && git submodule update --init --recursive && cd ..
 
     - name: Configure and Build
       run: |
@@ -47,4 +46,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: momsurffix_ext-so
-        path: build/package/addons/sourcemod/extensions/momsurffix_ext.ext.so  # 输出路径，根据日志调整
+        path: build/package/addons/sourcemod/extensions/momsurffix_ext.ext.so
