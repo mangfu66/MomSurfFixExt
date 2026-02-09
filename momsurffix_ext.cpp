@@ -1,12 +1,10 @@
-#include "extension.h"
-
 // ---------------------------------------------------------
 // 【第一区】暴力兼容补丁 (必须在文件最最最前面)
 // ---------------------------------------------------------
+// 这里的顺序至关重要：必须先定义宏，再引入任何 SDK 头文件
 #include <cstdlib> // 为了 aligned_alloc
 
-// 在引入任何 SDK 头文件之前，强制拦截 Windows 内存函数
-// 这样当 SDK 头文件被 extension.h 引入时，它们就已经被替换了
+// 强制拦截 Windows 内存函数
 #undef _aligned_malloc
 #undef _aligned_free
 // 注意：Linux 的 aligned_alloc 参数顺序是 (alignment, size)
@@ -15,16 +13,36 @@
 #define MemAlloc_AllocAlignedFileLine(size, align, file, line) aligned_alloc(align, size)
 
 // ---------------------------------------------------------
-// 【第二区】SourceMod & SDK
+// 【第二区】SDK 与 SourceMod
 // ---------------------------------------------------------
+// 在宏定义之后才引入 extension.h，确保 SDK 内部使用的是我们要的宏
 #include "extension.h"
 
-// 引入内存分配器接口 (解决 IMemAlloc unknown type / g_pMemAlloc undeclared)
+// 引入内存分配器接口
 #include <tier0/memalloc.h>
-// 显式声明全局变量
 extern IMemAlloc *g_pMemAlloc;
 
-// 常用常量
+// 引入 Trace 接口
+#include <engine/IEngineTrace.h>
+// 定义全局指针
+IEngineTrace *enginetrace = nullptr;
+
+// 引入 IHandleEntity
+#include <ihandleentity.h>
+
+// 引入空间划分 (ITraceFilter 定义)
+#include <ispatialpartition.h>
+
+// 引入 GameMovement 接口
+#include <igamemovement.h>
+
+#include <tier0/vprof.h>
+#include "smsdk_config.h"
+#include "simple_detour.h"
+
+// ---------------------------------------------------------
+// 常量与前置声明
+// ---------------------------------------------------------
 #ifndef MAXPLAYERS
 #define MAXPLAYERS 65
 #endif
@@ -40,18 +58,7 @@ enum PLAYER_ANIM {
 // 前置声明
 class CBasePlayer;
 class CBaseEntity;
-class CGameMovement; // 【修复】解决 Detour 函数参数报错
-
-// 引入接口
-#include <ihandleentity.h>
-// 【重要修复】必须引入这个头文件，否则 ITraceFilter 会报错 incomplete type
-#include <ispatialpartition.h> 
-#include <engine/IEngineTrace.h>
-#include <igamemovement.h>
-
-#include <tier0/vprof.h>
-#include "smsdk_config.h"
-#include "simple_detour.h"
+class CGameMovement; 
 
 // ---------------------------------------------------------
 // 辅助类
@@ -102,6 +109,26 @@ static Vector g_TempPlanes[MAX_CLIP_PLANES];
 void FindValidPlane(CGameMovement *pThis, CBasePlayer *pPlayer, const Vector &origin, const Vector &vel, Vector &outPlane);
 bool IsValidMovementTrace(const CGameTrace &tr);
 
+// 手动实现 TracePlayerBBox，因为我们无法链接到 CGameMovement 的内部实现
+void Manual_TracePlayerBBox(IGameMovement *pGM, const Vector &start, const Vector &end, unsigned int fMask, int collisionGroup, CGameTrace &pm)
+{
+    if (!enginetrace) return;
+
+    // 假设未蹲下，获取默认 Hull。如果需要精确，需要读取 m_bDucked
+    // 这里简化处理，直接调用接口获取
+    Vector mins = pGM->GetPlayerMins(false); 
+    Vector maxs = pGM->GetPlayerMaxs(false);
+
+    Ray_t ray;
+    ray.Init(start, end, mins, maxs);
+
+    // 获取玩家实体
+    CBasePlayer *player = pGM->GetMovingPlayer();
+    
+    CTraceFilterSimple traceFilter((IHandleEntity *)player, collisionGroup);
+    enginetrace->TraceRay(ray, fMask, &traceFilter, &pm);
+}
+
 // ---------------------------------------------------------
 // Detour 回调
 // ---------------------------------------------------------
@@ -109,6 +136,7 @@ typedef int (*TryPlayerMove_t)(CGameMovement *, Vector *, CGameTrace *, float);
 
 int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
 {
+    // 获取成员
     void *pPlayer = *(void **)((uintptr_t)pThis + g_off_Player);
     CMoveData *mv = *(CMoveData **)((uintptr_t)pThis + g_off_MV);
 
@@ -139,12 +167,15 @@ int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *p
     }
 
     float time_left = flTimeLeft;
+    int blocked = 0;
     int numbumps = g_cvRampBumpCount.GetInt();
     int numplanes = 0;
     bool stuck_on_ramp = false;
     Vector valid_plane;
     bool has_valid_plane = false;
-    int blocked = 0;
+
+    // 转换为接口指针以便调用虚函数
+    IGameMovement *pGM = (IGameMovement *)pThis;
 
     for (int bumpcount = 0; bumpcount < numbumps; bumpcount++)
     {
@@ -159,7 +190,8 @@ int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *p
         }
         else
         {
-            pThis->TracePlayerBBox(origin, end, MASK_PLAYERSOLID, COLLISION_GROUP_PLAYER_MOVEMENT, pm);
+            // 使用我们手动实现的 Trace，替代 pThis->TracePlayerBBox
+            Manual_TracePlayerBBox(pGM, origin, end, MASK_PLAYERSOLID, COLLISION_GROUP_PLAYER_MOVEMENT, pm);
         }
 
         if (pm.fraction > 0.0f)
@@ -206,167 +238,6 @@ int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *p
         for (int i = 0; i < numplanes; i++)
         {
             Vector new_vel;
-            // 【重要修复】g_TempPlanes[i] 是 Vector，直接访问 .z，没有 .normal
+            // Vector 没有 normal 成员，直接访问 z
             if (g_TempPlanes[i].z >= 0.7f)
             {
-                blocked_planes++;
-                new_vel.Init();
-            }
-            else
-            {
-                // ClipVelocity logic
-                float backoff = DotProduct(vel, g_TempPlanes[i]) * 1.0f;
-                new_vel = vel - (g_TempPlanes[i] * backoff);
-            }
-
-            if (i == 0)
-            {
-                vel = new_vel;
-            }
-            else
-            {
-                float dot = DotProduct(new_vel, new_vel);
-                if (dot > 0.0f)
-                    new_vel *= (vel.Length() / sqrt(dot));
-
-                vel = new_vel;
-            }
-
-            allFraction += pm.fraction;
-        }
-
-        if (blocked_planes == numplanes)
-        {
-            blocked |= 2;
-            break;
-        }
-    }
-
-    *pVel = vel;
-    *pOrigin = origin;
-
-    return blocked;
-}
-
-// ---------------------------------------------------------
-// 辅助函数
-// ---------------------------------------------------------
-void FindValidPlane(CGameMovement *pThis, CBasePlayer *pPlayer, const Vector &origin, const Vector &vel, Vector &outPlane)
-{
-    Vector sum_normal = vec3_origin;
-    int count = 0;
-
-    for (int x = -1; x <= 1; x++)
-    {
-        for (int y = -1; y <= 1; y++)
-        {
-            for (int z = -1; z <= 1; z++)
-            {
-                if (x == 0 && y == 0 && z == 0) continue;
-
-                Vector dir(x * 0.03125f, y * 0.03125f, z * 0.03125f);
-                dir.NormalizeInPlace();
-                Vector end = origin + (dir * 0.0625f);
-
-                CGameTrace trace;
-                CTraceFilterSimple filter((IHandleEntity*)pPlayer, COLLISION_GROUP_PLAYER_MOVEMENT);
-                Ray_t ray;
-                ray.Init(origin, end);
-                enginetrace->TraceRay(ray, MASK_PLAYERSOLID, &filter, &trace);
-
-                if (trace.fraction < 1.0f && trace.plane.normal.z > 0.7f)
-                {
-                    sum_normal += trace.plane.normal;
-                    count++;
-                }
-            }
-        }
-    }
-
-    if (count > 0)
-    {
-        outPlane = sum_normal * (1.0f / count);
-        outPlane.NormalizeInPlace();
-    }
-    else
-    {
-        outPlane = vec3_origin;
-    }
-}
-
-bool IsValidMovementTrace(const CGameTrace &tr)
-{
-    return (tr.fraction > 0.0f || tr.startsolid);
-}
-
-// ---------------------------------------------------------
-// 生命周期
-// ---------------------------------------------------------
-bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
-{
-    char conf_error[255];
-    IGameConfig *conf = nullptr;
-    if (!gameconfs->LoadGameConfigFile("momsurffix_fix.games", &conf, conf_error, sizeof(conf_error)))
-    {
-        snprintf(error, maxlength, "Could not read momsurffix_fix.games: %s", conf_error);
-        return false;
-    }
-
-    if (!conf->GetOffset("CGameMovement::player", &g_off_Player) ||
-        !conf->GetOffset("CGameMovement::mv", &g_off_MV) ||
-        !conf->GetOffset("CMoveData::m_vecVelocity", &g_off_VecVelocity) ||
-        !conf->GetOffset("CMoveData::m_vecAbsOrigin", &g_off_VecAbsOrigin))
-    {
-        snprintf(error, maxlength, "Failed to get core offsets from gamedata.");
-        gameconfs->CloseGameConfigFile(conf);
-        return false;
-    }
-
-    if (!conf->GetOffset("CBasePlayer::m_hGroundEntity", &g_off_GroundEntity))
-    {
-         snprintf(error, maxlength, "Missing 'CBasePlayer::m_hGroundEntity' in gamedata.");
-         gameconfs->CloseGameConfigFile(conf);
-         return false;
-    }
-
-    void *pTryPlayerMoveAddr = nullptr;
-    if (!conf->GetMemSig("CGameMovement::TryPlayerMove", &pTryPlayerMoveAddr) || !pTryPlayerMoveAddr)
-    {
-        snprintf(error, maxlength, "Failed to find signature for TryPlayerMove.");
-        gameconfs->CloseGameConfigFile(conf);
-        return false;
-    }
-
-    g_pDetour = new CSimpleDetour(pTryPlayerMoveAddr, (void *)Detour_TryPlayerMove);
-    if (!g_pDetour->Enable())
-    {
-        snprintf(error, maxlength, "Failed to enable detour.");
-        delete g_pDetour;
-        g_pDetour = nullptr;
-        gameconfs->CloseGameConfigFile(conf);
-        return false;
-    }
-
-    gameconfs->CloseGameConfigFile(conf);
-    return true;
-}
-
-void MomSurfFixExt::SDK_OnUnload()
-{
-    if (g_pDetour)
-    {
-        delete g_pDetour;
-        g_pDetour = nullptr;
-    }
-}
-
-void MomSurfFixExt::SDK_OnAllLoaded()
-{
-}
-
-bool MomSurfFixExt::QueryRunning(char *error, size_t maxlength)
-{
-    return true;
-}
-
-SMEXT_LINK(&g_MomSurfFixExt);
