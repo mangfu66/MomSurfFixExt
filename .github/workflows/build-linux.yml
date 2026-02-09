@@ -35,14 +35,13 @@ jobs:
         git clone --recursive https://github.com/alliedmodders/hl2sdk -b sdk2013 hl2sdk-csgo || (sleep 5; git clone --recursive https://github.com/alliedmodders/hl2sdk -b sdk2013 hl2sdk-csgo)
         cd hl2sdk-csgo && git submodule update --init --recursive && cd ..
 
-    - name: Configure and Build
+     - name: Configure and Build
       run: |
         mkdir build && cd build
         export PATH=$HOME/.local/bin:$PATH
-        ls -l /home/runner/work/MomSurfFixExt/MomSurfFixExt/sourcemod/amtl  # 调试 AMTL 目录
         python3 ../configure.py --sm-path=/home/runner/work/MomSurfFixExt/MomSurfFixExt/sourcemod --mms-path=/home/runner/work/MomSurfFixExt/MomSurfFixExt/mmsource --hl2sdk-path=/home/runner/work/MomSurfFixExt/MomSurfFixExt/hl2sdk-csgo --sdks=csgo --targets=x86
-        ambuild
-
+         ambuild
+         
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
