@@ -1,21 +1,15 @@
 # AMBuildScript
 import os
 
-# 1. 检测编译器
 cxx = builder.DetectCxx(target_arch=builder.options.targets)
-
-# 2. 创建库文件目标
 library = cxx.Library('momsurffix_ext.ext')
 
-# 3. 添加源文件
 library.sources += [ 'momsurffix_ext.cpp' ]
 
-# 4. 获取路径变量
 sm_path = builder.options.sm_path
 mms_path = builder.options.mms_path
 hl2sdk_path = builder.options.hl2sdk_path
 
-# 5. 添加头文件包含路径
 library.compiler.includes += [
     builder.sourcePath,
     os.path.join(sm_path, 'public'),
@@ -36,39 +30,33 @@ library.compiler.includes += [
     os.path.join(hl2sdk_path, 'public/tier1'),
 ]
 
-# 6. 【关键修复】宏定义
-# 修复了平台检测错误和 wchar_t 错误
 library.compiler.defines += [
     'SOURCEMOD_BUILD',
     'HAVE_STRING_H',
     'SE_EPISODEONE',
     'COMPILER_GCC',
     '_LINUX',
-    'LINUX',        # 补充：某些 SDK 版本检测这个
+    'LINUX',
     'POSIX',
-    '_POSIX',       # 补充
-    '_NATIVE_WCHAR_T_DEFINED', # 防止 SDK 重定义 wchar_t
+    '_POSIX',
+    '_NATIVE_WCHAR_T_DEFINED', # 防止重定义错误
 ]
 
-# 7. 【关键修复】提升 C++ 标准
-# 必须使用 c++17 或 c++14 以支持 std::make_unique
 library.compiler.cxxflags += [
-    '-std=c++17', 
+    '-std=c++17',             # 必须: 支持 std::make_unique
     '-fno-threadsafe-statics',
     '-fvisibility=hidden',
+    '-fshort-wchar',          # 推荐: CS:GO 使用 2字节 wchar
     '-Wno-deprecated-declarations',
-    '-Wno-macro-redefined', # 忽略重复宏定义的警告
+    '-Wno-macro-redefined',
 ]
 
-# 8. 链接标志 (Linux 32位)
 library.compiler.linkflags += ['-m32', '-lm', '-ldl']
 
-# 9. 链接静态库
 library.compiler.postlink += [
     os.path.join(hl2sdk_path, 'lib/linux/tier1_i486.a'),
     os.path.join(hl2sdk_path, 'lib/linux/mathlib_i486.a'),
     os.path.join(hl2sdk_path, 'lib/linux/interfaces_i486.a'),
 ]
 
-# 10. 注册构建目标
 builder.Add(library)
