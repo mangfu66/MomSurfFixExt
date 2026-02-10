@@ -5,19 +5,18 @@ import os
 cxx = builder.DetectCxx(target_arch=builder.options.targets)
 library = cxx.Library('momsurffix_ext.ext')
 
-# 2. 源文件
-# 我们需要把 SourceMod SDK 自带的 smsdk_ext.cpp 加进来
+# 2. 源文件 (保留 smsdk_ext.cpp 是正确的，不要删)
 sm_path = builder.options.sm_path
 library.sources += [
     'momsurffix_ext.cpp',
     'simple_detour.cpp',
+    os.path.join(sm_path, 'public', 'smsdk_ext.cpp')
 ]
 
-# 3. 获取其他路径参数
-# ❌ 删除 mms_path = builder.options.mms_path (不需要 Metamod)
+# 3. 获取其他路径参数 (❌ 删除 mms_path)
 hl2sdk_path = builder.options.hl2sdk_path
 
-# 4. 头文件包含路径
+# 4. 头文件包含路径 (❌ 彻底移除 Metamod 相关路径)
 library.compiler.includes += [
     builder.sourcePath,
     os.path.join(sm_path, 'public'),
@@ -28,7 +27,7 @@ library.compiler.includes += [
     os.path.join(sm_path, 'public/amtl/amtl'),
     os.path.join(sm_path, 'third_party/amtl'),
     os.path.join(sm_path, 'third_party/amtl/amtl'),
-    # ❌ 删除了所有 os.path.join(mms_path, ...) 的行
+    # 👇👇👇 下面这里原来的 mms_path 必须全部删掉 👇👇👇
     os.path.join(hl2sdk_path, 'public'),
     os.path.join(hl2sdk_path, 'public/engine'),
     os.path.join(hl2sdk_path, 'public/mathlib'),
