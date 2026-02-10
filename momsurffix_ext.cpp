@@ -281,15 +281,17 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
             blocked |= 2;
             break;
         }
-    }
+    } // end for loop
 
     *pVel = vel;
     *pOrigin = origin;
 
     return blocked;
-}
+} // end Detour_TryPlayerMove (必须在这里结束)
 
+// ============================================================================
 // 生命周期
+// ============================================================================
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
     char conf_error[255];
@@ -351,7 +353,7 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 
     gameconfs->CloseGameConfigFile(conf);
     return true;
-}
+} // end SDK_OnLoad
 
 void MomSurfFixExt::SDK_OnUnload()
 {
@@ -360,15 +362,16 @@ void MomSurfFixExt::SDK_OnUnload()
         delete g_pDetour;
         g_pDetour = nullptr;
     }
-}
+} // end SDK_OnUnload
 
 void MomSurfFixExt::SDK_OnAllLoaded()
 {
-}
+} // end SDK_OnAllLoaded
 
 bool MomSurfFixExt::QueryRunning(char *error, size_t maxlength)
 {
     return true;
-}
+} // end QueryRunning
 
+// 这里已经回到了全局作用域，可以安全调用 SMEXT_LINK
 SMEXT_LINK(&g_MomSurfFixExt);
