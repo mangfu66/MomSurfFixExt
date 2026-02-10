@@ -17,8 +17,7 @@ jobs:
         submodules: recursive
 
     - name: Install build dependencies (GCC 9 + 32bit)
-      # 【核心修复1】采用你提供的最稳妥的拆分安装法
-      # 避免 meta 包不存在导致依赖安装失败
+      # 采用最稳妥的拆分安装法，保证环境无误
       run: |
         sudo dpkg --add-architecture i386
         sudo apt-get update
@@ -53,32 +52,33 @@ jobs:
         git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo
 
     - name: Configure
-      # 【核心修复2】强制环境变量，防止 AMBuild 偷跑去用 Clang
+      # 强制环境变量，配合 configure -o 使用
       env:
         CC: gcc-9
         CXX: g++-9
       run: |
-        # 清理可能存在的残留 (虽然 Actions 每次都是新的，但习惯要好)
+        # 1. 清理环境，防止残留
         rm -rf build
-        mkdir build
-        cd build
         
-        # 【核心修复3】移除了导致崩溃的 --enable-optimize 参数
-        # 使用 ../configure.py 是 AMBuild 2.0 的标准用法，只要参数对了一定生成 vars
-        python3 ../configure.py \
+        # 2. 【核心修正】显式指定 -o build 输出目录
+        # 彻底解决 .ambuild2/vars 路径错乱的问题
+        python3 configure.py -o build \
           --sdks=csgo \
           --targets=x86 \
           --sm-path="${{ github.workspace }}/sdks/sourcemod" \
           --mms-path="${{ github.workspace }}/sdks/mmsource" \
           --hl2sdk-path="${{ github.workspace }}/sdks/hl2sdk-csgo"
+          
+        # 3. 🔥 强制校验：如果 vars 文件不存在，直接在此处报错，不留到下一步
+        test -f build/.ambuild2/vars
 
     - name: Build
       env:
         CC: gcc-9
         CXX: g++-9
       run: |
-        cd build
-        ambuild
+        # 【核心修正】不再 cd build，直接在根目录调用 ambuild 指定构建目录
+        ambuild build
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
