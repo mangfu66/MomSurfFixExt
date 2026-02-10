@@ -1,70 +1,30 @@
 // ============================================================================
-// 【第一区】环境配置与标准库 (必须最先定义)
+// 【第一区】标准库
 // ============================================================================
-// 1. 强制定义 METAMOD 标志，确保 SMEXT_LINK 宏能被正确展开 (解决编译报错)
-#define SMEXT_CONF_METAMOD
-
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
-#include <cstdio>  // 用于 Warning 垫片
-#include <cstdarg> // 用于 Warning 垫片
-
-// 2. Linux 内存分配垫片 (解决 SDK 内存函数缺失)
-// 使用 posix_memalign 替代 aligned_alloc，消除对 size 的苛刻限制
-static inline void* linux_aligned_malloc(size_t size, size_t align)
-{
-    void* ptr = nullptr;
-    if (posix_memalign(&ptr, align, size) != 0)
-        return nullptr;
-    return ptr;
-}
-
-// 3. 宏映射
-// 将 Valve 的 Windows 风格函数映射到我们的 Linux 实现
-#undef _aligned_malloc
-#undef _aligned_free
-#define _aligned_malloc(size, align) linux_aligned_malloc(size, align)
-#define _aligned_free free
-
-// 4. 基础兼容宏
-#ifndef abstract_class
-    #define abstract_class class
-#endif
-#ifndef OVERRIDE
-    #define OVERRIDE override
-#endif
+#include <cstdio>  // 新增：用于 Warning 垫片
+#include <cstdarg> // 新增：用于 Warning 垫片
 
 // ============================================================================
-// 【第二区】SDK 核心头文件
+// 【第二区】SDK 核心头文件 (极简模式)
 // ============================================================================
-// 引入 tier0 头文件。
-// 注意：我们不定义 NO_MALLOC_OVERRIDE，让 SDK 正常定义它的内联函数。
-// 因为我们上面已经定义了 _aligned_malloc 宏，SDK 的内联函数会直接使用我们的实现。
+// 1. 定义 METAMOD 标志，确保 SDK 知道我们要什么
+#define SMEXT_CONF_METAMOD
+
+// 2. 引入 SDK 头文件
+// 让 SDK 全权处理内存管理，我们不再手动补丁，防止重定义
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
-
-// 补充可能缺失的工具宏 (vector.h 依赖)
-#ifndef MEM_ALLOC_CREDIT_CLASS
-    #define MEM_ALLOC_CREDIT_CLASS()
-#endif
-
-// ============================================================================
-// 【第三区】SourceMod 扩展入口
-// ============================================================================
 #include "extension.h"
 #include "smsdk_config.h"
 
-// 显式声明 g_pMemAlloc (虽然头文件有 extern，但显式声明能避免某些链接器抽风)
-// 我们不初始化它，让它在运行时链接到引擎的 tier0 库
-extern IMemAlloc *g_pMemAlloc;
-
 // ============================================================================
-// 【第四区】业务逻辑头文件
+// 【第三区】业务逻辑头文件
 // ============================================================================
 #include <ihandleentity.h>
 
-// 欺骗编译器的假类定义
 class CBaseEntity : public IHandleEntity {};
 class CBasePlayer : public CBaseEntity {};
 
@@ -199,6 +159,7 @@ bool IsValidMovementTrace(const CGameTrace &tr)
 }
 
 // Detour 函数
+// 加上 THISCALL 防止 ABI 报错
 #ifndef THISCALL
     #define THISCALL
 #endif
@@ -419,11 +380,8 @@ bool MomSurfFixExt::QueryRunning(char *error, size_t maxlength)
 }
 
 // ============================================================================
-// 【第五区】Tier0 符号垫片 (解决 undefined symbol: Warning)
+// 【绝杀修复】1. 手动实现 Warning/Msg 垫片 (解决运行时 undefined symbol)
 // ============================================================================
-// 因为我们链接了 tier1 和 mathlib 静态库，它们调用了 Warning。
-// 我们必须手动实现它，否则加载时会报错。
-
 extern "C" void Warning(const char *pMsg, ...)
 {
     va_list ap;
@@ -432,6 +390,7 @@ extern "C" void Warning(const char *pMsg, ...)
     vsnprintf(buffer, sizeof(buffer), pMsg, ap);
     va_end(ap);
 
+    // 如果 smutils 还未初始化，用 printf 保底
     if (smutils)
         smutils->LogError("[MomSurfFix] %s", buffer);
     else
@@ -452,5 +411,19 @@ extern "C" void Msg(const char *pMsg, ...)
         printf("[MomSurfFix] %s", buffer);
 }
 
-// 这个宏现在一定能正确展开，因为我们强制定义了 SMEXT_CONF_METAMOD
-SMEXT_LINK(&g_MomSurfFixExt);
+// ============================================================================
+// 【绝杀修复】2. 手动展开 SMEXT_LINK 宏 (解决 expected constructor 报错)
+// ============================================================================
+// 既然宏 SMEXT_LINK 总是因为包含顺序报错，我们直接手写它背后的 C++ 代码。
+// 这确保了编译器绝对能看懂，没有任何宏魔法。
+
+#if defined __WIN32__ || defined _WIN32
+    #define DLLEXPORT __declspec(dllexport)
+#else
+    #define DLLEXPORT __attribute__((visibility("default")))
+#endif
+
+extern "C" DLLEXPORT void *GetSmmAPI()
+{
+    return (void *)&g_MomSurfFixExt;
+}
