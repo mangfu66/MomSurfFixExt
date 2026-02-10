@@ -6,20 +6,22 @@
 #include <cstdint>
 
 // ============================================================================
-// 【第二区】SDK 核心头文件 (标准模式)
+// 【第二区】SDK 核心头文件
 // ============================================================================
-// ❌ 移除 METAMOD 标志，回归标准 SourceMod 扩展模式
-// #define SMEXT_CONF_METAMOD
-
-// 引入 SDK 头文件
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
 #include "extension.h"
 #include "smsdk_config.h"
 
 // ============================================================================
-// 【第三区】业务逻辑头文件
+// 【第三区】业务逻辑头文件 (关键修复区)
 // ============================================================================
+// 👇👇👇 补上这三个头文件，顺序很重要 👇👇👇
+#include <tier1/convar.h>   // 修复: ConVar g_cv... does not name a type
+#include <gametrace.h>      // 修复: CGameTrace incomplete type
+#include <soundflags.h>     // 修复: soundlevel_t has not been declared
+// 👆👆👆 必须在 igamemovement.h 之前包含 👆👆👆
+
 #include <ihandleentity.h>
 
 class CBaseEntity : public IHandleEntity {};
