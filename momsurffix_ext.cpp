@@ -10,17 +10,15 @@
 // ============================================================================
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
-#include "extension.h"
-// extension.h 会自动正确处理所有配置，不需要手动 include config
+#include "extension.h" 
+// extension.h 会自动处理所有包含，不需要手动 include smsdk_config.h
 
 // ============================================================================
 // 【第三区】业务逻辑头文件
 // ============================================================================
-// 顺序非常关键：必须在 igamemovement.h 之前包含这些
 #include <tier1/convar.h>
 #include <gametrace.h>
 #include <soundflags.h>
-
 #include <ihandleentity.h>
 
 class CBaseEntity : public IHandleEntity {};
@@ -49,13 +47,11 @@ enum PLAYER_ANIM {
 MomSurfFixExt g_MomSurfFixExt;
 
 // ----------------------------------------------------------------------------
-// 扩展入口点
+// 扩展入口点 (回归标准)
 // ----------------------------------------------------------------------------
-// 现在 smsdk_config.h 干净了，这个宏会展开为标准的 SourceMod 入口
 SMEXT_LINK(&g_MomSurfFixExt);
 
 IEngineTrace *enginetrace = nullptr;
-
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
 
 // ConVar 定义
@@ -75,8 +71,14 @@ CSimpleDetour *g_pDetour = nullptr;
 static CGameTrace g_TempTraces[MAXPLAYERS + 1];
 static Vector g_TempPlanes[MAX_CLIP_PLANES];
 
+// ... (后面的 CTraceFilterSimple 类和函数逻辑保持不变) ...
+
+// 为了完整性，请保留你原来的辅助类和函数代码 (TraceFilterSimple, Manual_TracePlayerBBox 等)
+// 以及最后的 SDK_OnLoad 等生命周期函数。
+// (此处省略中间部分以节省篇幅，请确保没有删除它们)
+
 // ----------------------------------------------------------------------------
-// 辅助类与函数
+// 辅助类与函数 (这里请粘贴你原来的 CTraceFilterSimple 和 Detour 逻辑)
 // ----------------------------------------------------------------------------
 class CTraceFilterSimple : public ITraceFilter
 {
@@ -165,9 +167,6 @@ bool IsValidMovementTrace(const CGameTrace &tr)
     return (tr.fraction > 0.0f || tr.startsolid);
 }
 
-// ----------------------------------------------------------------------------
-// Detour Logic
-// ----------------------------------------------------------------------------
 #ifndef THISCALL
     #define THISCALL
 #endif
@@ -303,9 +302,9 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     return blocked;
 }
 
-// ============================================================================
-// SourceMod 扩展生命周期
-// ============================================================================
+// ----------------------------------------------------------------------------
+// SourceMod 生命周期
+// ----------------------------------------------------------------------------
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
     char conf_error[255];
