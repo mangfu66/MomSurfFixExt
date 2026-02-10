@@ -1,33 +1,25 @@
 // ============================================================================
-// 【第一区】标准库
+// 【0】SourceMod 扩展核心 —— 必须最先包含！
+// ============================================================================
+// 只有先包含它，SMEXT_LINK 才能被正确定义，也能避免 CVAR 宏冲突
+#include "extension.h"
+
+// ============================================================================
+// 【1】标准库
 // ============================================================================
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
 
 // ============================================================================
-// 【第二区】SDK 核心头文件
+// 【2】HL2SDK / Tier0 / Tier1
 // ============================================================================
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
-#include "extension.h" 
-// extension.h 会自动处理所有包含，不需要手动 include smsdk_config.h
-
-// ============================================================================
-// 【第三区】业务逻辑头文件
-// ============================================================================
 #include <tier1/convar.h>
 #include <gametrace.h>
 #include <soundflags.h>
 #include <ihandleentity.h>
-
-class CBaseEntity : public IHandleEntity {};
-class CBasePlayer : public CBaseEntity {};
-
-enum PLAYER_ANIM { 
-    PLAYER_IDLE, PLAYER_WALK, PLAYER_JUMP, PLAYER_SUPERJUMP, PLAYER_DIE, PLAYER_ATTACK1 
-};
-
 #include <engine/IEngineTrace.h>
 #include <ispatialpartition.h> 
 #include <igamemovement.h>
@@ -47,8 +39,9 @@ enum PLAYER_ANIM {
 MomSurfFixExt g_MomSurfFixExt;
 
 // ----------------------------------------------------------------------------
-// 扩展入口点 (回归标准)
+// 扩展入口点 (回归标准，不再手写)
 // ----------------------------------------------------------------------------
+// 因为 extension.h 是第一个包含的，这个宏现在会被正确展开
 SMEXT_LINK(&g_MomSurfFixExt);
 
 IEngineTrace *enginetrace = nullptr;
@@ -71,14 +64,8 @@ CSimpleDetour *g_pDetour = nullptr;
 static CGameTrace g_TempTraces[MAXPLAYERS + 1];
 static Vector g_TempPlanes[MAX_CLIP_PLANES];
 
-// ... (后面的 CTraceFilterSimple 类和函数逻辑保持不变) ...
-
-// 为了完整性，请保留你原来的辅助类和函数代码 (TraceFilterSimple, Manual_TracePlayerBBox 等)
-// 以及最后的 SDK_OnLoad 等生命周期函数。
-// (此处省略中间部分以节省篇幅，请确保没有删除它们)
-
 // ----------------------------------------------------------------------------
-// 辅助类与函数 (这里请粘贴你原来的 CTraceFilterSimple 和 Detour 逻辑)
+// 辅助类与函数
 // ----------------------------------------------------------------------------
 class CTraceFilterSimple : public ITraceFilter
 {
@@ -167,6 +154,9 @@ bool IsValidMovementTrace(const CGameTrace &tr)
     return (tr.fraction > 0.0f || tr.startsolid);
 }
 
+// ----------------------------------------------------------------------------
+// Detour Logic
+// ----------------------------------------------------------------------------
 #ifndef THISCALL
     #define THISCALL
 #endif
@@ -302,9 +292,9 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     return blocked;
 }
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // SourceMod 生命周期
-// ----------------------------------------------------------------------------
+// ============================================================================
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
     char conf_error[255];
