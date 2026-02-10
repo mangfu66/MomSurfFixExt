@@ -381,7 +381,15 @@ bool MomSurfFixExt::QueryRunning(char *error, size_t maxlength)
 // ============================================================================
 // 【绝杀修复】1. 手动实现 Warning/Msg 垫片 (解决运行时 undefined symbol)
 // ============================================================================
-extern "C" void Warning(const char *pMsg, ...)
+#if !defined(DLLEXPORT)
+  #if defined __WIN32__ || defined _WIN32
+      #define DLLEXPORT __declspec(dllexport)
+  #else
+      #define DLLEXPORT __attribute__((visibility("default")))
+  #endif
+#endif
+
+extern "C" DLLEXPORT void Warning(const char *pMsg, ...)
 {
     va_list ap;
     va_start(ap, pMsg);
@@ -390,12 +398,12 @@ extern "C" void Warning(const char *pMsg, ...)
     va_end(ap);
 
     if (smutils)
-        smutils->LogError("[MomSurfFix] %s", buffer);
+        smutils->LogError(&g_MomSurfFixExt, "[MomSurfFix] %s", buffer);
     else
         printf("[MomSurfFix] %s", buffer);
 }
 
-extern "C" void Msg(const char *pMsg, ...)
+extern "C" DLLEXPORT void Msg(const char *pMsg, ...)
 {
     va_list ap;
     va_start(ap, pMsg);
@@ -404,7 +412,7 @@ extern "C" void Msg(const char *pMsg, ...)
     va_end(ap);
 
     if (smutils)
-        smutils->LogMessage("[MomSurfFix] %s", buffer);
+        smutils->LogMessage(&g_MomSurfFixExt, "[MomSurfFix] %s", buffer);
     else
         printf("[MomSurfFix] %s", buffer);
 }
