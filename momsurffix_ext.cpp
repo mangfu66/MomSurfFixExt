@@ -4,16 +4,17 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
-#include <cstdio>  // 新增
-#include <cstdarg> // 新增
+#include <cstdio>  // 新增：用于 Warning 垫片
+#include <cstdarg> // 新增：用于 Warning 垫片
 
 // ============================================================================
-// 【第二区】SDK 核心头文件
+// 【第二区】SDK 核心头文件 (极简模式)
 // ============================================================================
-// 1. 定义 METAMOD 标志
+// 1. 定义 METAMOD 标志，确保 SDK 知道我们要什么
 #define SMEXT_CONF_METAMOD
 
 // 2. 引入 SDK 头文件
+// 让 SDK 全权处理内存管理，我们不再手动补丁，防止重定义
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
 #include "extension.h"
@@ -378,7 +379,7 @@ bool MomSurfFixExt::QueryRunning(char *error, size_t maxlength)
 }
 
 // ============================================================================
-// 【核心修复】手动实现 Warning/Msg 垫片
+// 【绝杀修复】1. 手动实现 Warning/Msg 垫片 (解决运行时 undefined symbol)
 // ============================================================================
 extern "C" void Warning(const char *pMsg, ...)
 {
@@ -411,6 +412,9 @@ extern "C" void Msg(const char *pMsg, ...)
 // ============================================================================
 // 【保留原逻辑】手动展开 SMEXT_LINK 宏
 // ============================================================================
+// 既然宏 SMEXT_LINK 总是报错，我们直接手写它背后的代码。
+// 这确保了编译器绝对能看懂，没有任何宏魔法。
+
 #if defined __WIN32__ || defined _WIN32
     #define DLLEXPORT __declspec(dllexport)
 #else
