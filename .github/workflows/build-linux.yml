@@ -17,21 +17,23 @@ jobs:
         submodules: recursive
 
     - name: Install build dependencies (GCC 9 + 32bit)
-      # 采用最稳妥的拆分安装法，保证环境无误
+      # 【核心修复】完全采纳你的建议，使用 multilib 包
+      # 同时加上 g++-9-multilib 确保 C++ 链接库也齐全
       run: |
         sudo dpkg --add-architecture i386
         sudo apt-get update
         
-        # 1. 安装编译器本体
+        # 1. 编译器 + 32位支持 (Multilib 是正解)
         sudo apt-get install -y --no-install-recommends \
-          gcc-9 g++-9
-          
-        # 2. 手动安装 32 位运行库 (关键)
+          gcc-9 g++-9 \
+          gcc-9-multilib g++-9-multilib
+
+        # 2. 运行库 (SourceMod 依赖)
         sudo apt-get install -y --no-install-recommends \
           libc6-dev-i386 \
           lib32stdc++6 \
           lib32z1-dev
-          
+
         # 3. 基础工具
         sudo apt-get install -y --no-install-recommends \
           make python3 python3-pip git ca-certificates
@@ -52,16 +54,15 @@ jobs:
         git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo
 
     - name: Configure
-      # 强制环境变量，配合 configure -o 使用
+      # 【核心修复】强制环境变量 CC/CXX
       env:
         CC: gcc-9
         CXX: g++-9
       run: |
-        # 1. 清理环境，防止残留
+        # 1. 清理环境
         rm -rf build
         
-        # 2. 【核心修正】显式指定 -o build 输出目录
-        # 彻底解决 .ambuild2/vars 路径错乱的问题
+        # 2. 【核心修复】使用 -o build 指定输出目录，彻底解决路径问题
         python3 configure.py -o build \
           --sdks=csgo \
           --targets=x86 \
@@ -69,7 +70,7 @@ jobs:
           --mms-path="${{ github.workspace }}/sdks/mmsource" \
           --hl2sdk-path="${{ github.workspace }}/sdks/hl2sdk-csgo"
           
-        # 3. 🔥 强制校验：如果 vars 文件不存在，直接在此处报错，不留到下一步
+        # 3. 验证校验
         test -f build/.ambuild2/vars
 
     - name: Build
@@ -77,7 +78,7 @@ jobs:
         CC: gcc-9
         CXX: g++-9
       run: |
-        # 【核心修正】不再 cd build，直接在根目录调用 ambuild 指定构建目录
+        # 【核心修复】直接调用 ambuild build，不 cd 进去
         ambuild build
 
     - name: Upload Artifact
