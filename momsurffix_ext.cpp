@@ -4,10 +4,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
-#include <stdlib.h> // posix_memalign 需要此头文件
+#include <stdlib.h> // posix_memalign
 
-// 1. Linux 内存分配垫片 (核心稳定性保障)
-// 使用 posix_memalign 解决 aligned_alloc 对 size 的苛刻要求
+// 1. Linux 内存分配垫片 (核心)
+// HL2SDK 的 memalloc.h 在 Linux 下依然调用 _aligned_malloc，必须提供实现
+// 使用 posix_memalign 是最稳健的，兼容 glibc 各版本
 static inline void* linux_aligned_malloc(size_t size, size_t align)
 {
     void* ptr = nullptr;
@@ -16,13 +17,14 @@ static inline void* linux_aligned_malloc(size_t size, size_t align)
     return ptr;
 }
 
-// 2. 强制映射 Valve 的 Windows 风格函数
+// 2. 宏映射
+// 在包含任何 SDK 头文件之前定义，这样 SDK 内部的代码就会使用我们的实现
 #undef _aligned_malloc
 #undef _aligned_free
 #define _aligned_malloc(size, align) linux_aligned_malloc(size, align)
 #define _aligned_free free
 
-// 3. 基础兼容宏
+// 3. 基础宏
 #ifndef abstract_class
     #define abstract_class class
 #endif
@@ -30,72 +32,32 @@ static inline void* linux_aligned_malloc(size_t size, size_t align)
     #define OVERRIDE override
 #endif
 
-// ============================================================================
-// 【第二区】SDK 预处理干预 (关键步骤)
-// ============================================================================
-
-// 【核心步骤 1】在包含 memalloc.h 之前，先定义 NO_MALLOC_OVERRIDE
-// 这告诉 SDK：不要接管全局 new/delete，也不要定义冲突的内联函数
-#define NO_MALLOC_OVERRIDE
-#define NO_HOOK_MALLOC
+// 【关键修正】这里绝对不要定义 NO_MALLOC_OVERRIDE
+// 让 SDK 正常工作，它会提供 g_pMemAlloc 和 MemAlloc_AllocAligned
 
 // ============================================================================
-// 【第三区】引入 SDK 头文件
+// 【第二区】SDK 核心头文件
 // ============================================================================
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
 
-// ============================================================================
-// 【第四区】宏清理与函数补全 (决胜局)
-// ============================================================================
+// 此时：
+// 1. g_pMemAlloc 正常声明，icvar.h 不会报错
+// 2. MemAlloc_AllocAligned 由 SDK 定义，调用我们的 _aligned_malloc 宏
+// 3. vector.h 能正常使用上述函数
 
-// 【核心步骤 2】强制干掉 memalloc.h 可能定义的宏
-// 这一步必须做！防止 vector.h 使用 SDK 默认的 g_pMemAlloc->AllocAligned 宏
-#ifdef MemAlloc_AllocAligned
-    #undef MemAlloc_AllocAligned
-#endif
-#ifdef MemAlloc_AllocAlignedFileLine
-    #undef MemAlloc_AllocAlignedFileLine
-#endif
-#ifdef MemAlloc_FreeAligned
-    #undef MemAlloc_FreeAligned
-#endif
-
-// 【核心步骤 3】手动补全 inline 函数
-// 这样 vector.h 就会调用我们的安全实现，而不是错误的宏展开
-inline void *MemAlloc_AllocAligned(size_t size, size_t align)
-{
-    return linux_aligned_malloc(size, align);
-}
-
-inline void *MemAlloc_AllocAlignedFileLine(size_t size, size_t align, const char *pszFile, int nLine)
-{
-    return linux_aligned_malloc(size, align);
-}
-
-inline void MemAlloc_FreeAligned(void *pMemBlock)
-{
-    free(pMemBlock);
-}
-
-inline void MemAlloc_FreeAligned(void *pMemBlock, const char *pszFile, int nLine)
-{
-    free(pMemBlock);
-}
-
-// 补全工具宏
+// 补全可能缺失的工具宏
 #ifndef MEM_ALLOC_CREDIT_CLASS
     #define MEM_ALLOC_CREDIT_CLASS()
 #endif
 
 // ============================================================================
-// 【第五区】SourceMod 扩展入口
+// 【第三区】SourceMod 扩展入口
 // ============================================================================
-// 此时引入 extension.h，它链入 vector.h 时会看到我们正确的 inline 函数
 #include "extension.h"
 
 // ============================================================================
-// 【第六区】业务逻辑头文件
+// 【第四区】业务逻辑头文件
 // ============================================================================
 #include <ihandleentity.h>
 
