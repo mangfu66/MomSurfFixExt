@@ -4,27 +4,22 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
-#include <stdlib.h> // 【微调】POSIX 标准头文件，包含 posix_memalign
+#include <stdlib.h> // POSIX 标准
 
-// 【核心实现】linux_aligned_malloc
-// 使用 posix_memalign 替代 aligned_alloc，消除对 size 的苛刻限制
-// 这是 Valve 遗留代码在 Linux 下最稳健的内存分配方式
+// 【核心实现】linux_aligned_malloc (正如你所说，这是最稳的)
 static inline void* linux_aligned_malloc(size_t size, size_t align)
 {
     void* ptr = nullptr;
-    // posix_memalign 返回 0 表示成功，非 0 表示失败
     if (posix_memalign(&ptr, align, size) != 0)
         return nullptr;
     return ptr;
 }
 
-// 映射 Valve 的 Windows 风格函数
 #undef _aligned_malloc
 #undef _aligned_free
 #define _aligned_malloc(size, align) linux_aligned_malloc(size, align)
 #define _aligned_free free
 
-// 基础兼容宏
 #ifndef abstract_class
     #define abstract_class class
 #endif
@@ -32,8 +27,10 @@ static inline void* linux_aligned_malloc(size_t size, size_t align)
     #define OVERRIDE override
 #endif
 
-// 【关键决策】这里绝不定义 NO_MALLOC_OVERRIDE
-// 我们接受 SourceMod/Tier0 的内存接管，这是正道。
+// 这一段我们不动了，这是 CSGO Legacy + Linux + SM 扩展 的唯一稳态组合
+// 接受 SourceMod/Tier0 的内存接管
+// #define NO_MALLOC_OVERRIDE  <-- 已删除
+// #define NO_HOOK_MALLOC      <-- 已删除
 
 // ============================================================================
 // 【第二区】SDK 核心头文件
@@ -41,15 +38,12 @@ static inline void* linux_aligned_malloc(size_t size, size_t align)
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
 
-// 【ABI 修正】MemAlloc_AllocAlignedFileLine
-// 既然接受了 tier0 接管，我们就可以安全调用 AllocAligned
-// 这保证了 SSE/Vector 运算所需的 16 字节严格对齐，防止数学库 UB
+// 补充 SDK 可能缺失的内联函数，全部指向我们的安全实现
 #ifndef MemAlloc_AllocAlignedFileLine
     #define MemAlloc_AllocAlignedFileLine(size, align, file, line) \
         g_pMemAlloc->AllocAligned(size, align, file, line)
 #endif
 
-// 补全可能缺失的宏
 #ifndef MEM_ALLOC_CREDIT_CLASS
     #define MEM_ALLOC_CREDIT_CLASS()
 #endif
@@ -58,10 +52,6 @@ static inline void* linux_aligned_malloc(size_t size, size_t align)
 // 【第三区】SourceMod 扩展入口
 // ============================================================================
 #include "extension.h"
-
-// 【生命周期修正】
-// 我们不自己定义 g_pMemAlloc，也不手动初始化它。
-// 链接时，tier0_i486.a 或 SourceMod 加载器会处理符号解析。
 
 // ============================================================================
 // 【第四区】业务逻辑头文件
@@ -84,7 +74,7 @@ enum PLAYER_ANIM {
 #include "simple_detour.h"
 
 // ============================================================================
-// 全局变量 & 业务逻辑 (保持不变)
+// 全局变量
 // ============================================================================
 #ifndef MAXPLAYERS
 #define MAXPLAYERS 65
@@ -203,8 +193,17 @@ bool IsValidMovementTrace(const CGameTrace &tr)
     return (tr.fraction > 0.0f || tr.startsolid);
 }
 
-// Detour 函数
-typedef int (*TryPlayerMove_t)(void *, Vector *, CGameTrace *, float);
+// ============================================================================
+// Detour 函数 - 【ABI 修正区】
+// ============================================================================
+// 【修正】增加 THISCALL 宏，确保调用约定与引擎一致 (虽然 Linux 下通常为空，但语义必须对齐)
+// 防止 SourceMod 未来更新头文件导致 ABI 错位
+#ifndef THISCALL
+    #define THISCALL
+#endif
+
+// 定义原始函数指针，加上 THISCALL
+typedef int (THISCALL *TryPlayerMove_t)(void *, Vector *, CGameTrace *, float);
 
 int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
 {
@@ -213,26 +212,33 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 
     TryPlayerMove_t Original = (TryPlayerMove_t)g_pDetour->GetTrampoline();
 
+    // 如果环境没准备好，直接回退原版
     if (!pPlayer || !mv || !Original) return 0;
 
     VPROF_BUDGET("Momentum_TryPlayerMove", VPROF_BUDGETGROUP_PLAYER);
 
-    int client = ((IHandleEntity *)pPlayer)->GetRefEHandle().GetEntryIndex();
-    
-    CGameTrace &pm = g_TempTraces[client];
-    pm = CGameTrace(); 
-
+    // 【逻辑修正】如果速度极小，直接调用原版逻辑，并返回其结果
+    // 这样能保留引擎原生的静止/卡住判定
     Vector *pVel = (Vector *)((uintptr_t)mv + g_off_VecVelocity);
     Vector vel = *pVel; 
 
-    Vector *pOrigin = (Vector *)((uintptr_t)mv + g_off_VecAbsOrigin);
-    Vector origin = *pOrigin;
-    
     if (vel.LengthSqr() < 0.000001f)
     {
         return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft); 
     }
 
+    // --- 开始接管移动逻辑 (Momentum Loop) ---
+    // 注意：这里我们完全替代了原版循环，因为原版循环无法修复 Ramp Bug
+    // 所以我们无法 "return result | blocked"，因为我们根本没跑 Original
+    
+    int client = ((IHandleEntity *)pPlayer)->GetRefEHandle().GetEntryIndex();
+    
+    CGameTrace &pm = g_TempTraces[client];
+    pm = CGameTrace(); 
+
+    Vector *pOrigin = (Vector *)((uintptr_t)mv + g_off_VecAbsOrigin);
+    Vector origin = *pOrigin;
+    
     float time_left = flTimeLeft;
     int numbumps = g_cvRampBumpCount.GetInt();
     int numplanes = 0;
