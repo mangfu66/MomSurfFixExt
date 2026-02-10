@@ -1,22 +1,21 @@
 // ============================================================================
-// 【第一区】环境配置与标准库
+// 【第一区】标准库
 // ============================================================================
-// 【绝杀修复】强制定义 METAMOD 标志，确保 SMEXT_LINK 宏被正确生成
-// 即使 smsdk_config.h 读取失败，这里也能保底
-#define SMEXT_CONF_METAMOD
-
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
 
 // ============================================================================
-// 【第二区】SDK 核心头文件
+// 【第二区】SDK 核心头文件 (极简模式)
 // ============================================================================
-// SourceMod 环境下，直接包含这些头文件，让 SDK 处理内存
+// 1. 定义 METAMOD 标志，确保 SDK 知道我们要什么
+#define SMEXT_CONF_METAMOD
+
+// 2. 引入 SDK 头文件
+// 让 SDK 全权处理内存管理，我们不再手动补丁，防止重定义
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
 #include "extension.h"
-// 再次显式包含配置，双重保险
 #include "smsdk_config.h"
 
 // ============================================================================
@@ -158,6 +157,7 @@ bool IsValidMovementTrace(const CGameTrace &tr)
 }
 
 // Detour 函数
+// 加上 THISCALL 防止 ABI 报错
 #ifndef THISCALL
     #define THISCALL
 #endif
@@ -377,5 +377,20 @@ bool MomSurfFixExt::QueryRunning(char *error, size_t maxlength)
     return true;
 }
 
-// 现在 SMEXT_CONF_METAMOD 肯定定义了，SMEXT_LINK 宏一定会被正确展开
-SMEXT_LINK(&g_MomSurfFixExt);
+// ============================================================================
+// 【绝杀修复】手动展开 SMEXT_LINK 宏
+// ============================================================================
+// 既然宏 SMEXT_LINK 总是报错，我们直接手写它背后的代码。
+// 这确保了编译器绝对能看懂，没有任何宏魔法。
+// 这里的 GetSmmAPI 是 Metamod 用来加载插件的标准入口。
+
+#if defined __WIN32__ || defined _WIN32
+    #define DLLEXPORT __declspec(dllexport)
+#else
+    #define DLLEXPORT __attribute__((visibility("default")))
+#endif
+
+extern "C" DLLEXPORT void *GetSmmAPI()
+{
+    return (void *)&g_MomSurfFixExt;
+}
