@@ -4,8 +4,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
-#include <cstdio>  // 新增：用于 Warning 垫片
-#include <cstdarg> // 新增：用于 Warning 垫片
 
 // ============================================================================
 // 【第二区】SDK 核心头文件 (极简模式)
@@ -159,6 +157,7 @@ bool IsValidMovementTrace(const CGameTrace &tr)
 }
 
 // Detour 函数
+// 加上 THISCALL 防止 ABI 报错
 #ifndef THISCALL
     #define THISCALL
 #endif
@@ -379,49 +378,11 @@ bool MomSurfFixExt::QueryRunning(char *error, size_t maxlength)
 }
 
 // ============================================================================
-// 【绝杀修复】1. 手动实现 Warning/Msg 垫片 (解决运行时 undefined symbol)
-// ============================================================================
-#if !defined(DLLEXPORT)
-  #if defined __WIN32__ || defined _WIN32
-      #define DLLEXPORT __declspec(dllexport)
-  #else
-      #define DLLEXPORT __attribute__((visibility("default")))
-  #endif
-#endif
-
-extern "C" DLLEXPORT void Warning(const char *pMsg, ...)
-{
-    va_list ap;
-    va_start(ap, pMsg);
-    char buffer[2048];
-    vsnprintf(buffer, sizeof(buffer), pMsg, ap);
-    va_end(ap);
-
-    if (smutils)
-        smutils->LogError(&g_MomSurfFixExt, "[MomSurfFix] %s", buffer);
-    else
-        printf("[MomSurfFix] %s", buffer);
-}
-
-extern "C" DLLEXPORT void Msg(const char *pMsg, ...)
-{
-    va_list ap;
-    va_start(ap, pMsg);
-    char buffer[2048];
-    vsnprintf(buffer, sizeof(buffer), pMsg, ap);
-    va_end(ap);
-
-    if (smutils)
-        smutils->LogMessage(&g_MomSurfFixExt, "[MomSurfFix] %s", buffer);
-    else
-        printf("[MomSurfFix] %s", buffer);
-}
-
-// ============================================================================
-// 【保留原逻辑】手动展开 SMEXT_LINK 宏
+// 【绝杀修复】手动展开 SMEXT_LINK 宏
 // ============================================================================
 // 既然宏 SMEXT_LINK 总是报错，我们直接手写它背后的代码。
 // 这确保了编译器绝对能看懂，没有任何宏魔法。
+// 这里的 GetSmmAPI 是 Metamod 用来加载插件的标准入口。
 
 #if defined __WIN32__ || defined _WIN32
     #define DLLEXPORT __declspec(dllexport)
