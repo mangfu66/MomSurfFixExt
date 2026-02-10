@@ -49,11 +49,16 @@ enum PLAYER_ANIM {
 MomSurfFixExt g_MomSurfFixExt;
 IEngineTrace *enginetrace = nullptr;
 
-IExtension *g_pExtensionIface = nullptr;
+// ============================================================================
+// 【修正】手动定义 Metamod 模式下缺失的全局变量
+// 类型已修正，严格匹配 smsdk_ext.h 中的声明
+// ============================================================================
+SDKExtension *g_pExtensionIface = nullptr;
 const SourceHook::ISourceHook *g_pSourceHook = nullptr;
 IShareSys *g_pShareSys = nullptr;
-ISmmAPI *g_pSM = nullptr;
+ISourceMod *g_pSM = nullptr;
 const void *g_pMetaGlobals = nullptr;
+// ============================================================================
 
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
 
@@ -389,6 +394,9 @@ bool MomSurfFixExt::QueryRunning(char *error, size_t maxlength)
 // 既然宏 SMEXT_LINK 总是报错，我们直接手写它背后的代码。
 // 这确保了编译器绝对能看懂，没有任何宏魔法。
 // 这里的 GetSmmAPI 是 Metamod 用来加载插件的标准入口。
+
+// 【新增】先取消之前的定义，防止 warning: "DLLEXPORT" redefined
+#undef DLLEXPORT 
 
 #if defined __WIN32__ || defined _WIN32
     #define DLLEXPORT __declspec(dllexport)
