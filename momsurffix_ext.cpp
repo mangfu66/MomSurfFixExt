@@ -4,11 +4,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
-#include <cstdio>  // 新增：用于 Warning 垫片
-#include <cstdarg> // 新增：用于 Warning 垫片
+#include <cstdio>  // 新增
+#include <cstdarg> // 新增
 
 // ============================================================================
-// 【第二区】SDK 核心头文件 (极简模式)
+// 【第二区】SDK 核心头文件
 // ============================================================================
 // 1. 定义 METAMOD 标志
 #define SMEXT_CONF_METAMOD
@@ -158,7 +158,6 @@ bool IsValidMovementTrace(const CGameTrace &tr)
 }
 
 // Detour 函数
-// 加上 THISCALL 防止 ABI 报错
 #ifndef THISCALL
     #define THISCALL
 #endif
@@ -379,7 +378,7 @@ bool MomSurfFixExt::QueryRunning(char *error, size_t maxlength)
 }
 
 // ============================================================================
-// 【绝杀修复】1. 手动实现 Warning/Msg 垫片 (解决运行时 undefined symbol)
+// 【核心修复】手动实现 Warning/Msg 垫片
 // ============================================================================
 extern "C" void Warning(const char *pMsg, ...)
 {
@@ -389,7 +388,6 @@ extern "C" void Warning(const char *pMsg, ...)
     vsnprintf(buffer, sizeof(buffer), pMsg, ap);
     va_end(ap);
 
-    // 如果 smutils 还未初始化，用 printf 保底
     if (smutils)
         smutils->LogError("[MomSurfFix] %s", buffer);
     else
@@ -411,11 +409,8 @@ extern "C" void Msg(const char *pMsg, ...)
 }
 
 // ============================================================================
-// 【保留原逻辑】2. 保持你之前编译成功的链接代码
+// 【保留原逻辑】手动展开 SMEXT_LINK 宏
 // ============================================================================
-// 既然宏 SMEXT_LINK 之前报错，我们就保留你这个手动展开的写法。
-// 这确保了编译绝对通过。
-
 #if defined __WIN32__ || defined _WIN32
     #define DLLEXPORT __declspec(dllexport)
 #else
