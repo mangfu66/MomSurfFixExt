@@ -36,12 +36,11 @@ jobs:
         gcc --version
 
     - name: Install AMBuild
-      # 【关键修复】从 GitHub 源码安装，而不是 pip
+      # 从 GitHub 源码安装
       run: |
         git clone https://github.com/alliedmodders/ambuild
         cd ambuild
         python3 setup.py install --user
-        # 将安装目录加入 PATH，确保能找到 ambuild 命令
         echo "$HOME/.local/bin" >> $GITHUB_PATH
 
     - name: Checkout SourceMod SDKs
@@ -56,8 +55,8 @@ jobs:
       run: |
         mkdir build
         cd build
+        # 移除了不支持的 --enable-optimize 参数
         python3 ../configure.py \
-          --enable-optimize \
           --sdks=csgo \
           --targets=x86 \
           --sm-path="${{ github.workspace }}/sdks/sourcemod" \
