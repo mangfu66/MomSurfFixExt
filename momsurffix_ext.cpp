@@ -21,18 +21,17 @@
 #include <ihandleentity.h> 
 
 // ============================================================================
-// 【3】SDK 兼容层 (关键修复)
+// 【3】SDK 兼容垫片 (关键修复：枚举必须完整定义！)
 // ============================================================================
 
 // A. 类类型：前置声明 (Forward Declaration)
-// 我们只需要指针 (CBasePlayer*)，不需要知道它的内部布局，所以前置声明是安全的
+// 安全，因为我们只用指针
 class CBasePlayer;
 class CBaseEntity;
 
-// B. 枚举类型：手动定义 (Mock Definition)
-// ❌ 原代码引用的 playeranimstate.h 在 CS:GO SDK 中不存在
-// ✅ 我们手动定义这个枚举，仅为了欺骗编译器，让 imovehelper.h 能通过编译
-// 只要我们在代码里不调用 PlayerSetAnimation()（我们确实没调用），这就完全安全
+// B. 枚举类型：完整定义 (Dummy Definition)
+// ❌ 之前的错误原因：只写了 "enum PLAYER_ANIM;"
+// ✅ 必须写出完整的花括号内容，否则编译器不知道它占多大内存，无法按值传递
 enum PLAYER_ANIM 
 { 
     PLAYER_IDLE = 0, 
@@ -48,7 +47,7 @@ enum PLAYER_ANIM
 // ============================================================================
 #include <engine/IEngineTrace.h>
 #include <ispatialpartition.h> 
-// 此时 PLAYER_ANIM 已经定义，igamemovement.h 可以顺利解析了
+// 此时 PLAYER_ANIM 已经有完整定义，imovehelper.h 不会再报错了
 #include <igamemovement.h> 
 #include <tier0/vprof.h>
 #include "simple_detour.h"
@@ -66,9 +65,20 @@ enum PLAYER_ANIM
 MomSurfFixExt g_MomSurfFixExt;
 
 // ----------------------------------------------------------------------------
-// 扩展入口点 (标准宏)
+// 【终极方案 A】智能入口导出
 // ----------------------------------------------------------------------------
-SMEXT_LINK(&g_MomSurfFixExt);
+// 逻辑：如果 SDK 因为检测到 Metamod 宏而把 SMEXT_LINK 变空了，
+// 我们就自己手动导出入口函数。这能完美兼容两种情况。
+#if defined(SMEXT_CONF_METAMOD)
+    // Metamod 模式下 SMEXT_LINK 为空，我们需要手动补上 SourceMod 入口
+    extern "C" __attribute__((visibility("default"))) IMSPlugin *GetSMExtAPI()
+    {
+        return &g_MomSurfFixExt;
+    }
+#else
+    // 正常模式，使用 SDK 标准宏
+    SMEXT_LINK(&g_MomSurfFixExt);
+#endif
 
 IEngineTrace *enginetrace = nullptr;
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
@@ -114,7 +124,6 @@ private:
     int m_collisionGroup;
 };
 
-// 使用 IHandleEntity* 替代 CBasePlayer*，避开类型依赖
 void Manual_TracePlayerBBox(IGameMovement *pGM, IHandleEntity *pPlayerEntity, const Vector &start, const Vector &end, unsigned int fMask, int collisionGroup, CGameTrace &pm)
 {
     if (!enginetrace) return;
@@ -196,7 +205,6 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 
     if (!pPlayer || !mv || !Original) return 0;
 
-    // 强转为 IHandleEntity*，这在 Source Engine 中是约定俗成的安全操作
     IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
 
     VPROF_BUDGET("Momentum_TryPlayerMove", VPROF_BUDGETGROUP_PLAYER);
