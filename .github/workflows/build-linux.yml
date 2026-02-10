@@ -21,27 +21,27 @@ jobs:
         sudo dpkg --add-architecture i386
         sudo apt-get update
 
-        # 【关键修改1】直接安装 gcc-9-multilib 和 g++-9-multilib
-        # 这会自动处理好所有的 32 位依赖，比手动装 libc6-dev-i386 更稳
+        # 安装 GCC-9 和 32位 运行库
         sudo apt-get install -y --no-install-recommends \
           gcc-9-multilib g++-9-multilib \
           make python3 python3-pip git ca-certificates
 
-        # 【关键修改2】强制将系统默认编译器指向 GCC 9
-        # 这样确保 AMBuild 绝对不会意外调用到 GCC 11
+        # 强制将系统默认编译器指向 GCC 9
         sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 100
         sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 100
         sudo update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-9 100
         sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-9 100
 
-        # 验证版本 (应该是 9.x)
+        # 验证版本
         gcc --version
-        g++ --version
 
     - name: Install AMBuild
+      # 【关键修复】从 GitHub 源码安装，而不是 pip
       run: |
-        python3 -m pip install --user --upgrade pip
-        python3 -m pip install --user ambuild
+        git clone https://github.com/alliedmodders/ambuild
+        cd ambuild
+        python3 setup.py install --user
+        # 将安装目录加入 PATH，确保能找到 ambuild 命令
         echo "$HOME/.local/bin" >> $GITHUB_PATH
 
     - name: Checkout SourceMod SDKs
@@ -56,7 +56,6 @@ jobs:
       run: |
         mkdir build
         cd build
-        # 不需要再手动指定 CC/CXX 了，因为系统默认已经改成了 GCC 9
         python3 ../configure.py \
           --enable-optimize \
           --sdks=csgo \
