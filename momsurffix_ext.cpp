@@ -1,6 +1,10 @@
 // ============================================================================
-// 【第一区】标准库
+// 【第一区】环境配置与标准库
 // ============================================================================
+// 【绝杀修复】强制定义 METAMOD 标志，确保 SMEXT_LINK 宏被正确生成
+// 即使 smsdk_config.h 读取失败，这里也能保底
+#define SMEXT_CONF_METAMOD
+
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
@@ -8,11 +12,11 @@
 // ============================================================================
 // 【第二区】SDK 核心头文件
 // ============================================================================
-// 在 SourceMod 环境下，直接包含这些头文件即可
-// SDK 会自动处理内存管理，无需我们手动补丁
+// SourceMod 环境下，直接包含这些头文件，让 SDK 处理内存
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
 #include "extension.h"
+// 再次显式包含配置，双重保险
 #include "smsdk_config.h"
 
 // ============================================================================
@@ -281,13 +285,13 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
             blocked |= 2;
             break;
         }
-    } // end for loop
+    }
 
     *pVel = vel;
     *pOrigin = origin;
 
     return blocked;
-} // end Detour_TryPlayerMove (必须在这里结束)
+}
 
 // ============================================================================
 // 生命周期
@@ -353,7 +357,7 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 
     gameconfs->CloseGameConfigFile(conf);
     return true;
-} // end SDK_OnLoad
+}
 
 void MomSurfFixExt::SDK_OnUnload()
 {
@@ -362,16 +366,16 @@ void MomSurfFixExt::SDK_OnUnload()
         delete g_pDetour;
         g_pDetour = nullptr;
     }
-} // end SDK_OnUnload
+}
 
 void MomSurfFixExt::SDK_OnAllLoaded()
 {
-} // end SDK_OnAllLoaded
+}
 
 bool MomSurfFixExt::QueryRunning(char *error, size_t maxlength)
 {
     return true;
-} // end QueryRunning
+}
 
-// 这里已经回到了全局作用域，可以安全调用 SMEXT_LINK
+// 现在 SMEXT_CONF_METAMOD 肯定定义了，SMEXT_LINK 宏一定会被正确展开
 SMEXT_LINK(&g_MomSurfFixExt);
