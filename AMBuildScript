@@ -11,7 +11,6 @@ sm_path = builder.options.sm_path
 library.sources += [
     'momsurffix_ext.cpp',
     'simple_detour.cpp',
-    os.path.join(sm_path, 'public', 'smsdk_ext.cpp')
 ]
 
 # 3. 获取其他路径参数
