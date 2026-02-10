@@ -1,4 +1,12 @@
 // ============================================================================
+// 【第零区】核弹级修复 (强制覆盖配置)
+// ============================================================================
+// 先引入配置，然后强行取消 Metamod 定义
+// 这样无论 smsdk_config.h 里怎么写，这里都会强制关闭它
+#include "smsdk_config.h"
+#undef SMEXT_CONF_METAMOD 
+
+// ============================================================================
 // 【第一区】标准库
 // ============================================================================
 #include <cstdlib>
@@ -11,16 +19,15 @@
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
 #include "extension.h"
-#include "smsdk_config.h"
+// smsdk_config.h 已经在最上面包含过了，这里重复包含会被 Header Guard 挡住，安全
 
 // ============================================================================
-// 【第三区】业务逻辑头文件 (关键修复区)
+// 【第三区】业务逻辑头文件
 // ============================================================================
-// 👇👇👇 补上这三个头文件，顺序很重要 👇👇👇
-#include <tier1/convar.h>   // 修复: ConVar g_cv... does not name a type
-#include <gametrace.h>      // 修复: CGameTrace incomplete type
-#include <soundflags.h>     // 修复: soundlevel_t has not been declared
-// 👆👆👆 必须在 igamemovement.h 之前包含 👆👆👆
+// 顺序非常关键：必须在 igamemovement.h 之前包含这些
+#include <tier1/convar.h>
+#include <gametrace.h>
+#include <soundflags.h>
 
 #include <ihandleentity.h>
 
@@ -49,12 +56,14 @@ enum PLAYER_ANIM {
 
 MomSurfFixExt g_MomSurfFixExt;
 
+// 这是扩展的入口注册宏，现在 Metamod 关闭后，它能正常展开了
 SMEXT_LINK(&g_MomSurfFixExt);
 
 IEngineTrace *enginetrace = nullptr;
 
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
 
+// ConVar 定义
 ConVar g_cvRampBumpCount("momsurffix_ramp_bumpcount", "8", FCVAR_NOTIFY);
 ConVar g_cvRampInitialRetraceLength("momsurffix_ramp_retrace_length", "0.2", FCVAR_NOTIFY);
 ConVar g_cvNoclipWorkaround("momsurffix_enable_noclip_workaround", "1", FCVAR_NOTIFY);
@@ -71,7 +80,9 @@ CSimpleDetour *g_pDetour = nullptr;
 static CGameTrace g_TempTraces[MAXPLAYERS + 1];
 static Vector g_TempPlanes[MAX_CLIP_PLANES];
 
-// 辅助类
+// ----------------------------------------------------------------------------
+// 辅助类与函数
+// ----------------------------------------------------------------------------
 class CTraceFilterSimple : public ITraceFilter
 {
 public:
@@ -93,7 +104,6 @@ private:
     int m_collisionGroup;
 };
 
-// 业务逻辑函数
 void Manual_TracePlayerBBox(IGameMovement *pGM, const Vector &start, const Vector &end, unsigned int fMask, int collisionGroup, CGameTrace &pm)
 {
     if (!enginetrace) return;
@@ -160,8 +170,9 @@ bool IsValidMovementTrace(const CGameTrace &tr)
     return (tr.fraction > 0.0f || tr.startsolid);
 }
 
-// Detour 函数
-// 加上 THISCALL 防止 ABI 报错
+// ----------------------------------------------------------------------------
+// Detour Logic
+// ----------------------------------------------------------------------------
 #ifndef THISCALL
     #define THISCALL
 #endif
@@ -298,7 +309,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 }
 
 // ============================================================================
-// 生命周期
+// SourceMod 扩展生命周期
 // ============================================================================
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
