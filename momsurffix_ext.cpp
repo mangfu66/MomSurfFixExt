@@ -66,6 +66,14 @@ void OnEnableChanged(IConVar *var, const char *pOldValue, float flOldValue);
 ConVar g_cvEnable("momsurffix_enable", "1", 0, "Enable Surf Bug Fix", OnEnableChanged);
 ConVar g_cvDebug("momsurffix_debug", "0", 0, "Print debug info");
 
+// --- 参数化调整 ---
+ConVar g_cvSensitivity("momsurffix_sensitivity", "0.97", 0, "Sensitivity threshold for speed loss detection (0.90 - 0.99)");
+ConVar g_cvAntiStutterOffset("momsurffix_antistutter_offset", "0.01", 0, "Micro position adjustment to prevent stuttering (units)");
+
+// 【新增】斜坡判定与落地判定参数
+ConVar g_cvRampNormalZ("momsurffix_ramp_normalz", "0.7", 0, "Slope normal Z threshold. Surfaces steeper than this (lower Z) are treated as ramps/walls. (Default 0.7 ~= 45 deg)");
+ConVar g_cvLandingSpeed("momsurffix_landing_speed", "100.0", 0, "Vertical speed threshold. Landings slower than this are treated as smooth surf exits (no view punch). (Default 100.0)");
+
 // 偏移量定义
 int g_off_Player = -1;
 int g_off_MV = -1;
@@ -74,6 +82,10 @@ int g_off_VecAbsOrigin = -1;
 int g_off_GroundEntity = -1;
 int g_off_VecMins = -1;
 int g_off_VecMaxs = -1;
+
+// 兼容性检查偏移
+int g_off_WaterLevel = -1;
+int g_off_MoveType = -1;
 
 CSimpleDetour *g_pDetour = nullptr;
 
@@ -150,12 +162,14 @@ void TracePlayerBBox(const Vector &start, const Vector &end, void *pPlayer, IHan
 }
 
 // ----------------------------------------------------------------------------
-// Detour Logic (智能判断版：Surf无感出坡 + Bhop正常起跳)
+// Detour Logic (全参数化完全体)
 // ----------------------------------------------------------------------------
 #ifndef THISCALL
     #define THISCALL
 #endif
 typedef int (THISCALL *TryPlayerMove_t)(void *, Vector *, CGameTrace *, float);
+
+#define MOVETYPE_LADDER 9
 
 int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
 {
@@ -169,6 +183,23 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     void *pPlayer = *(void **)((uintptr_t)pThis + g_off_Player);
     CMoveData *mv = *(CMoveData **)((uintptr_t)pThis + g_off_MV);
     if (!pPlayer || !mv) return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
+
+    // ========================================================================
+    // 兼容性保护 (梯子 & 水下)
+    // ========================================================================
+    if (g_off_MoveType != -1)
+    {
+        unsigned char moveTypeByte = *(unsigned char *)((uintptr_t)pPlayer + g_off_MoveType);
+        if (moveTypeByte == MOVETYPE_LADDER) 
+            return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
+    }
+
+    if (g_off_WaterLevel != -1)
+    {
+        unsigned char waterLevel = *(unsigned char *)((uintptr_t)pPlayer + g_off_WaterLevel);
+        if (waterLevel >= 2)
+            return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
+    }
 
     Vector *pVel = (Vector *)((uintptr_t)mv + g_off_VecVelocity);
     Vector *pOrigin = (Vector *)((uintptr_t)mv + g_off_VecAbsOrigin);
@@ -187,41 +218,45 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     // ========================================================================
     // 【智能落地优化】Smart Anti-Landing-Punch
     // ========================================================================
-    // 目的：区分"Surf滑出坡"和"Bhop跳落地"
-    // 逻辑：如果刚落地，且垂直速度很小(<100)，说明是滑行切出，强制滞空以消除震动。
-    //       如果垂直速度大(>100)，说明是跳跃落地，保留落地状态以便起跳。
-    
     unsigned long hGroundEntityPost = *pGroundEntity;
 
-    // 检查：刚落地 + 速度快(Surf状态)
     if (hGroundEntityPre == 0xFFFFFFFF && hGroundEntityPost != 0xFFFFFFFF && preSpeedSq > 250.0f * 250.0f)
     {
-        // 检查垂直速度 (绝对值)
-        // Bhop落地通常 > 300 (800重力下起跳落地)
-        // Surf出坡通常 < 50
-        if (std::abs(pVel->z) < 100.0f)
+        // 【参数化】使用 Cvar 控制落地判定速度 (默认 100.0)
+        float landingSpeedThreshold = g_cvLandingSpeed.GetFloat();
+
+        // 垂直速度小于阈值 -> 视为滑行切出 -> 消除震动
+        // 垂直速度大于阈值 -> 视为跳跃落地 -> 保留震动
+        if (std::abs(pVel->z) < landingSpeedThreshold)
         {
-             // 判定为 Surf 平滑出坡 -> 强制滞空，消除顿挫
              *pGroundEntity = 0xFFFFFFFF;
         }
     }
 
     // ========================================================================
-    // 撞坡修复逻辑 (Ramp Fix)
+    // 撞坡修复逻辑
     // ========================================================================
 
     if (preSpeedSq < 250.0f * 250.0f) return result;
 
     float postSpeedSq = pVel->LengthSqr();
-    if (postSpeedSq > preSpeedSq * 0.97f) return result;
+    
+    // 【参数化】灵敏度 (默认 0.97)
+    float sensitivity = g_cvSensitivity.GetFloat();
+    if (postSpeedSq > preSpeedSq * sensitivity) return result;
 
+    // 4. 执行修复检测
     IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
     CGameTrace trace;
     
     Vector endPos = preOrigin + (preVelocity * flTimeLeft);
     TracePlayerBBox(preOrigin, endPos, pPlayer, pEntity, COLLISION_GROUP_PLAYER_MOVEMENT, trace);
 
-    if (trace.DidHit() && trace.plane.normal.z < 0.7f)
+    // 【参数化】斜坡判定阈值 (默认 0.7)
+    float rampNormalZ = g_cvRampNormalZ.GetFloat();
+
+    // 只针对陡峭斜坡触发修复 (z < rampNormalZ)
+    if (trace.DidHit() && trace.plane.normal.z < rampNormalZ)
     {
         float backoff = DotProduct(preVelocity, trace.plane.normal);
         
@@ -229,14 +264,15 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
         {
             Vector fixVel = preVelocity - (trace.plane.normal * backoff);
 
+            // 【参数化】防抖偏移量 (默认 0.01)
+            float antiStutterOffset = g_cvAntiStutterOffset.GetFloat();
+
             if (trace.plane.normal.z > 0.0f) 
             {
-                 *pOrigin = trace.endpos + (trace.plane.normal * 0.01f);
+                 *pOrigin = trace.endpos + (trace.plane.normal * antiStutterOffset);
             }
 
             *pVel = fixVel;
-            
-            // 撞坡修复时，强制滞空 (防止Bug导致的震动)
             *pGroundEntity = 0xFFFFFFFF;
             
             if (g_cvDebug.GetBool())
@@ -248,7 +284,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 }
 
 // ----------------------------------------------------------------------------
-// SDK 生命周期 (保持不变)
+// SDK 生命周期
 // ----------------------------------------------------------------------------
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
@@ -285,14 +321,19 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         }
     }
 
+    // 碰撞箱偏移
     if (gamehelpers->FindSendPropInfo("CBasePlayer", "m_vecMins", &info))
-    {
         g_off_VecMins = info.actual_offset;
-    }
     if (gamehelpers->FindSendPropInfo("CBasePlayer", "m_vecMaxs", &info))
-    {
         g_off_VecMaxs = info.actual_offset;
-    }
+
+    // 兼容性偏移
+    if (gamehelpers->FindSendPropInfo("CBaseEntity", "m_nWaterLevel", &info))
+        g_off_WaterLevel = info.actual_offset;
+    if (gamehelpers->FindSendPropInfo("CBaseEntity", "m_MoveType", &info))
+        g_off_MoveType = info.actual_offset;
+    else if (gamehelpers->FindSendPropInfo("CBasePlayer", "m_MoveType", &info))
+        g_off_MoveType = info.actual_offset;
 
     void *pTryPlayerMoveAddr = nullptr;
     if (!conf->GetMemSig("CGameMovement::TryPlayerMove", &pTryPlayerMoveAddr) || !pTryPlayerMoveAddr)
