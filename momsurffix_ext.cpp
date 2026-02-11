@@ -136,7 +136,7 @@ void TracePlayerBBox(const Vector &start, const Vector &end, IHandleEntity *pPla
 }
 
 // ----------------------------------------------------------------------------
-// Detour Logic (最终纯净手感版：无顿挫、不卡墙、无怪异推力)
+// Detour Logic (全能修复版：无感 + 防卡 + 消除落地震动)
 // ----------------------------------------------------------------------------
 #ifndef THISCALL
     #define THISCALL
@@ -160,70 +160,76 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     Vector *pVel = (Vector *)((uintptr_t)mv + g_off_VecVelocity);
     Vector *pOrigin = (Vector *)((uintptr_t)mv + g_off_VecAbsOrigin);
 
-    // 1. 记录原始状态
+    // 1. 记录原始状态 (运行前)
     Vector preVelocity = *pVel;
     Vector preOrigin = *pOrigin;
     float preSpeedSq = preVelocity.LengthSqr();
+    
+    // 记录运行前的 GroundEntity 状态
+    unsigned long *pGroundEntity = (unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
+    unsigned long hGroundEntityPre = *pGroundEntity;
 
     // 2. 运行原版引擎
     int result = Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
 
-    // 3. 检查是否需要修复
+    // ========================================================================
+    // 【关键新增】消除落地视觉震动 (Anti-Landing-Punch Fix)
+    // ========================================================================
+    // 即使没有撞坡 Bug，只要高速滑行到地面，引擎就会判定"落地"并震动视角。
+    // 我们需要在这里拦截：如果是高速状态下的"刚落地"，强制重置为空中状态。
+    // 这必须在下面的"速度损失检查"之前做，否则平滑落地会被 return 跳过。
     
-    // 条件 A: 速度必须足够快 (滑翔中)
+    unsigned long hGroundEntityPost = *pGroundEntity;
+    
+    // 条件：之前是空中(-1)，现在是地面(非-1)，且速度很快(>250)
+    if (preSpeedSq > 250.0f * 250.0f && hGroundEntityPre == 0xFFFFFFFF && hGroundEntityPost != 0xFFFFFFFF)
+    {
+        // 强制欺骗引擎：我还在空中。
+        // 这消除了"自动蹲一下"的视觉差，并让你在地面上也能像冰面一样顺滑。
+        *pGroundEntity = 0xFFFFFFFF;
+    }
+
+    // ========================================================================
+    // 以下是原来的撞坡修复逻辑 (Ramp Glitch Fix)
+    // ========================================================================
+
+    // 条件 A: 速度必须足够快
     if (preSpeedSq < 250.0f * 250.0f) return result;
 
-    // 条件 B: 【已优化】移除空中检查
-    // 允许在引擎误判落地的瞬间进行修复，解决接坡时的"卡顿/失效"
-    // unsigned long hGroundEntity = *(unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
-    // if (hGroundEntity != 0xFFFFFFFF) return result;
-
-    // 条件 C: 速度发生了非自然损失 (撞坡 BUG)
+    // 条件 C: 速度发生了非自然损失
     float postSpeedSq = pVel->LengthSqr();
     
-    // 【手感优化】将灵敏度从 0.95 调回 0.97
-    // 只有在真正发生 Bug 时才介入，避免在正常摩擦时干扰手感
+    // 灵敏度 0.97
     if (postSpeedSq > preSpeedSq * 0.97f) return result;
 
     // 4. 执行修复
     IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
     CGameTrace trace;
     
-    // 重新探测
     Vector endPos = preOrigin + (preVelocity * flTimeLeft);
     TracePlayerBBox(preOrigin, endPos, pEntity, COLLISION_GROUP_PLAYER_MOVEMENT, trace);
 
-    // 只有撞向陡峭斜坡时才修复 (z < 0.7)
     if (trace.DidHit() && trace.plane.normal.z < 0.7f)
     {
-        // 计算标准滑行速度
         float backoff = DotProduct(preVelocity, trace.plane.normal);
         
         if (backoff < 0.0f)
         {
             Vector fixVel = preVelocity - (trace.plane.normal * backoff);
 
-            // 【优化3】保持移除垂直速度限制
-            // 防止高空落坡时速度被截断产生的"踩踏感"
-            // if (fixVel.z > 600.0f) fixVel.z = 600.0f;
-            // if (fixVel.z < -600.0f) fixVel.z = -600.0f;
-
-            // ==============================================================
             // 【手感核心优化】微小位置修正 (Anti-Stutter)
-            // ==============================================================
             if (trace.plane.normal.z > 0.0f) 
             {
-                 // 1. 保留 0.01 的微小位置修正
-                 //    这足以防止物理引擎判定"卡入墙体"导致的速度归零，
-                 //    同时因为距离极小，客户端插值能完美平滑过渡，消除"顿挫/瞬移感"。
+                 // 1. 保留 0.01 的微小位置修正，无感防卡。
                  *pOrigin = trace.endpos + (trace.plane.normal * 0.01f);
-
-                 // 2. 【已删除】人工推力 (fixVel += 1.0f)
-                 //    删除了之前添加的向外推力，消除了滑行时的"怪异/发飘/排斥"手感。
+                 // 2. 去除推力，保证纯净手感。
             }
 
-            // 应用修复
+            // 应用修复速度
             *pVel = fixVel;
+            
+            // 双重保险：修复过程也强制置空 GroundEntity
+            *pGroundEntity = 0xFFFFFFFF;
             
             if (g_cvDebug.GetBool())
                 Msg("[MomSurfFix] FIXED! Speed: %.0f -> %.0f\n", sqrt(preSpeedSq), fixVel.Length());
@@ -256,7 +262,6 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 智能获取 m_hGroundEntity 偏移，防止 gamedata 过期
     sm_sendprop_info_t info;
     if (gamehelpers->FindSendPropInfo("CBasePlayer", "m_hGroundEntity", &info))
     {
@@ -297,7 +302,6 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 手动注册参数
     void *hVStdLib = dlopen("libvstdlib_srv.so", RTLD_NOW | RTLD_NOLOAD);
     if (!hVStdLib) hVStdLib = dlopen("libvstdlib.so", RTLD_NOW | RTLD_NOLOAD);
     
