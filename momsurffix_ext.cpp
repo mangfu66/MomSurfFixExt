@@ -61,7 +61,6 @@ typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
 void OnEnableChanged(IConVar *var, const char *pOldValue, float flOldValue);
 
 // ConVar 定义
-// 注意：移除了 FCVAR_NOTIFY，添加了回调函数
 ConVar g_cvEnable("momsurffix_enable", "1", 0, "Enable Surf Bug Fix", OnEnableChanged);
 ConVar g_cvDebug("momsurffix_debug", "0", 0, "Print debug info");
 
@@ -74,25 +73,22 @@ int g_off_GroundEntity = -1;
 CSimpleDetour *g_pDetour = nullptr;
 
 // ----------------------------------------------------------------------------
-// 动态开关逻辑 (Dynamic Hooking)
+// 动态开关逻辑
 // ----------------------------------------------------------------------------
-// 这是最彻底的开关：直接卸载钩子。
-// 当 momsurffix_enable 0 时，引擎会直接调用原版函数，扩展代码一行都不会跑。
 void UpdateDetourState()
 {
     if (!g_pDetour) return;
 
-    bool shouldEnable = g_cvEnable.GetBool();
-    
-    if (shouldEnable)
+    // 打印状态变化，让你确认命令是否生效
+    if (g_cvEnable.GetBool())
     {
         g_pDetour->Enable();
-        // Msg("[MomSurfFix] Detour ENABLED.\n");
+        Msg("[MomSurfFix] Status: ENABLED (Hook Active)\n");
     }
     else
     {
         g_pDetour->Disable();
-        // Msg("[MomSurfFix] Detour DISABLED. Running pure vanilla physics.\n");
+        Msg("[MomSurfFix] Status: DISABLED (Vanilla Physics)\n");
     }
 }
 
@@ -139,7 +135,7 @@ void TracePlayerBBox(const Vector &start, const Vector &end, IHandleEntity *pPla
 }
 
 // ----------------------------------------------------------------------------
-// Detour Logic (完全信任原版 + 事后补救)
+// Detour Logic (更灵敏的反应式修复)
 // ----------------------------------------------------------------------------
 #ifndef THISCALL
     #define THISCALL
@@ -148,11 +144,13 @@ typedef int (THISCALL *TryPlayerMove_t)(void *, Vector *, CGameTrace *, float);
 
 int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
 {
-    // 如果走到这里，说明 g_cvEnable 肯定是 1 (否则钩子就被卸载了)
-    // 所以不需要再判断 g_cvEnable
-
     TryPlayerMove_t Original = (TryPlayerMove_t)g_pDetour->GetTrampoline();
-    if (!Original) return 0;
+    
+    // 【双重保险】如果开关关闭，强制执行原版逻辑，不运行任何额外代码
+    if (!Original || !g_cvEnable.GetBool()) 
+    {
+        return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
+    }
 
     void *pPlayer = *(void **)((uintptr_t)pThis + g_off_Player);
     CMoveData *mv = *(CMoveData **)((uintptr_t)pThis + g_off_MV);
@@ -161,29 +159,29 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     Vector *pVel = (Vector *)((uintptr_t)mv + g_off_VecVelocity);
     Vector *pOrigin = (Vector *)((uintptr_t)mv + g_off_VecAbsOrigin);
 
-    // 记录原始状态
+    // 1. 记录原始状态
     Vector preVelocity = *pVel;
     Vector preOrigin = *pOrigin;
     float preSpeedSq = preVelocity.LengthSqr();
 
-    // 执行原版逻辑
+    // 2. 运行原版引擎
     int result = Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
 
-    // --- 仅在非常特定的条件下才介入修复 ---
+    // 3. 检查是否需要修复
     
-    // 1. 必须是滑翔状态 (速度 > 250)
+    // 必须是滑翔状态 (速度 > 250)
     if (preSpeedSq < 250.0f * 250.0f) return result;
 
-    // 2. 必须在空中
+    // 必须在空中
     unsigned long hGroundEntity = *(unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
     if (hGroundEntity != 0xFFFFFFFF) return result;
 
-    // 3. 必须发生了异常减速 (Ramp Bug 特征)
+    // 【调整阈值】只要速度损失超过 10% 就尝试修复 (原版是 30%)
+    // 这会让插件更灵敏，更容易触发修复，不再感觉是“空壳”
     float postSpeedSq = pVel->LengthSqr();
-    // 允许损失 25% 的速度 (正常碰撞)，如果损失更多，视为 Bug
-    if (postSpeedSq > preSpeedSq * 0.75f) return result;
+    if (postSpeedSq > preSpeedSq * 0.9f) return result;
 
-    // --- 执行修复 ---
+    // 4. 执行修复
     IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
     CGameTrace trace;
     
@@ -193,24 +191,24 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 
     if (trace.DidHit() && trace.plane.normal.z < 0.7f)
     {
-        // 重新计算滑行向量
         float backoff = DotProduct(preVelocity, trace.plane.normal);
         if (backoff < 0.0f)
         {
             Vector fixVel = preVelocity - (trace.plane.normal * backoff);
 
-            // 安全限速 (防止飞天)
-            if (fixVel.z > 600.0f) fixVel.z = 600.0f;
+            // 安全限速 (800) 防止飞天
+            if (fixVel.z > 800.0f) fixVel.z = 800.0f;
 
             // 应用修复
             *pVel = fixVel;
             
-            // Noclip 推离墙体
+            // 推离墙体
             if (trace.plane.normal.z > 0.0f) 
                  *pOrigin = trace.endpos + (trace.plane.normal * 0.1f);
 
+            // 调试信息：如果开启 debug，你会看到这条消息，证明插件活在
             if (g_cvDebug.GetBool())
-                Msg("[MomSurfFix] Fixed Ramp Bug! %.0f -> %.0f\n", sqrt(preSpeedSq), fixVel.Length());
+                Msg("[MomSurfFix] Fixed Ramp Bug! Speed kept: %.0f -> %.0f\n", sqrt(preSpeedSq), fixVel.Length());
         }
     }
 
@@ -255,10 +253,10 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 初始化 Detour 对象，但先不 Enable
+    // 初始化 Detour 对象
     g_pDetour = new CSimpleDetour(pTryPlayerMoveAddr, (void *)Detour_TryPlayerMove);
     
-    // 根据 ConVar 初始值决定是否 Enable
+    // 立即根据 ConVar 初始值设置状态
     UpdateDetourState();
 
     void *pCreateInterface = nullptr;
@@ -275,7 +273,7 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 手动注册 ConVar (因为我们是手动模式)
+    // 手动注册 ConVar
     void *hVStdLib = dlopen("libvstdlib_srv.so", RTLD_NOW | RTLD_NOLOAD);
     if (!hVStdLib) hVStdLib = dlopen("libvstdlib.so", RTLD_NOW | RTLD_NOLOAD);
     
@@ -306,7 +304,6 @@ void MomSurfFixExt::SDK_OnUnload()
 {
     if (g_pDetour)
     {
-        // 确保卸载时恢复原状
         g_pDetour->Disable();
         delete g_pDetour;
         g_pDetour = nullptr;
