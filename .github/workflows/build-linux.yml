@@ -20,8 +20,6 @@ jobs:
       run: |
         sudo dpkg --add-architecture i386
         sudo apt-get update
-        
-        # 1. 安装编译器和 32 位支持
         sudo apt-get install -y --no-install-recommends \
           gcc-9 g++-9 \
           gcc-9-multilib g++-9-multilib \
@@ -29,10 +27,6 @@ jobs:
           lib32stdc++6 \
           lib32z1-dev \
           make python3 python3-pip git ca-certificates
-
-        # 2. 【绝杀修复】手动修复 asm 头文件路径
-        # Ubuntu 22.04 的 gcc-9-multilib 有时找不到 asm 目录，手动软链一下即可
-        # 这一步能解决 fatal error: asm/errno.h: No such file or directory
         sudo ln -s /usr/include/x86_64-linux-gnu/asm /usr/include/asm || true
 
     - name: Install AMBuild
@@ -46,7 +40,9 @@ jobs:
       run: |
         mkdir -p sdks
         cd sdks
+        # ✅ 【关键修改】锁定 SourceMod 1.11 (稳定兼容 CS:GO)
         git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.11-dev sourcemod
+        # ✅ 【回归标准】保留 Metamod 1.12 (向下兼容没问题)
         git clone --recursive https://github.com/alliedmodders/metamod-source -b 1.12-dev mmsource
         git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo
 
@@ -56,7 +52,7 @@ jobs:
         CXX: g++-9
       run: |
         rm -rf build
-        # 这里的 -o build 和前面的环境变量配合，已经验证是没问题的
+        # ✅ 【回归标准】保留 --mms-path，这是标准 SM 扩展的构建方式
         python3 configure.py -o build \
           --sdks=csgo \
           --targets=x86 \
