@@ -4,25 +4,16 @@
 	{
 		"Keys"
 		{
-			//CGameMovement
-			"CGameMovement::player"				"4"
-			"CGameMovement::mv"					"8"
-			//...
-			"CGameMovement::m_pTraceListData"	"3660"
-			"CGameMovement::m_nTraceCount"		"3664"
-			
-			//cplane_t		
+			// 这里保留原始的 Keys 也没关系，作为参考
 			"cplane_t::normal"					"0"
 			"cplane_t::dist"					"12"
 			"cplane_t::type"					"16"
 			"cplane_t::signbits"				"17"
 			
-			//csurface_t		
 			"csurface_t::name"					"0"
 			"csurface_t::surfaceProps"			"4"
 			"csurface_t::flags"					"6"
 			
-			//CGameTrace		
 			"CGameTrace::startpos"				"0"
 			"CGameTrace::endpos"				"12"
 			"CGameTrace::plane"					"24"
@@ -36,7 +27,6 @@
 			"CGameTrace::hitgroup"				"68"
 			"CGameTrace::physicsbone"			"72"
 			
-			//CTraceFilterSimple
 			"CTraceFilterSimple::vptr"								"0"
 			"CTraceFilterSimple::m_pPassEnt"						"4"
 			"CTraceFilterSimple::m_collisionGroup"					"8"
@@ -68,37 +58,16 @@
 	{
 		"Keys"
 		{
-			//EngineTrace interface name
 			"CEngineTrace"	"EngineTraceServer003"
-		
-			//CMoveData
-			"CMoveData::m_nPlayerHandle"		"4"
-			"CMoveData::m_vecVelocity"			"68"
-			//...
-			"CMoveData::m_vecAbsOrigin"			"156"
-			
-			//CGameTrace
 			"CGameTrace::m_pEnt"				"74"
 			"CGameTrace::hitbox"				"80"
 			"CGameTrace::size"					"84"
-			
-			//CBaseHandle
 			"CBaseHandle::m_Index"				"0"
-			
-			//CBaseEntityList
 			"CBaseEntityList::m_EntPtrArray"	"0"
-			
-			//CEntInfo
 			"CEntInfo::m_pEntity"				"4"
 			"CEntInfo::m_SerialNumber"			"8"
-			//...
 			"CEntInfo::size"					"16"
-			
-			//CBasePlayer
-			//Offset is relative to m_szLastPlaceName netprop and will be added to it
 			"CBasePlayer::m_surfaceFriction"	"104"
-			
-			//Ray_t
 			"Ray_t::m_Start"					"0"
 			"Ray_t::m_Delta"					"16"
 			"Ray_t::m_StartOffset"				"32"
@@ -120,7 +89,6 @@
 					"read" "0"
 				}
 			}
-			
 			"g_pEntityList"
 			{
 				"windows"
@@ -134,7 +102,6 @@
 					"read"	"475"
 				}
 			}
-			
 			"sm_pSingleton"
 			{
 				"windows"
@@ -147,10 +114,8 @@
 					"signature"	"CGameMovement::TryPlayerMove"
 					"read"	"667"
 				}
-				
 				"read" "0"
 			}
-			
 			"CTraceFilterSimple::vtable"
 			{
 				"windows"
@@ -174,58 +139,49 @@
 				"windows"		"\xA1\x2A\x2A\x2A\x2A\xA8\x2A\x75\x2A\x83\xC8\x2A\xC7\x05\x2A\x2A\x2A\x2A\x2A\x2A\x2A\x2A\x68\x2A\x2A\x2A\x2A\xA3\x2A\x2A\x2A\x2A\xC7\x05\x2A\x2A\x2A\x2A\x2A\x2A\x2A\x2A\xC7\x05\x2A\x2A\x2A\x2A\x2A\x2A\x2A\x2A\xC7\x05\x2A\x2A\x2A\x2A\x2A\x2A\x2A\x2A\xE8"
 				"linux"			"@_Z16MoveHelperServerv"
 			}
-			
 			"CTraceFilterSimple::CTraceFilterSimple"
 			{
 				"library"		"server"
 				"windows"		"\x55\x8B\xEC\x8B\x45\x08\x89\x41\x04\x8B\x45\x0C\x89\x41\x08\x8B\x45\x10\x89\x41\x0C\x8B\xC1\xC7\x01\x2A\x2A\x2A\x2A\x5D"
 				"linux"			"@_ZN18CTraceFilterSimpleC2EPK13IHandleEntityiPFbPS0_iE"
 			}
-			
 			"CGameMovement::TracePlayerBBox"
 			{
 				"library"		"server"
 				"windows"		"\x53\x8B\xDC\x83\xEC\x08\x83\xE4\xF0\x83\xC4\x04\x55\x8B\x6B\x04\x89\x6C\x24\x04\x8B\xEC\x83\xEC\x7C\x56"
 				"linux"			"@_ZN13CGameMovement15TracePlayerBBoxERK6VectorS2_jiR10CGameTrace"
 			}
-			
 			"CGameMovement::TryPlayerMove"
 			{
 				"library"		"server"
 				"windows"		"\x55\x8B\xEC\x81\xEC\x2A\x2A\x2A\x2A\x56\x57\x33\xC0"
 				"linux"			"@_ZN13CGameMovement13TryPlayerMoveEP6VectorP10CGameTracef"
 			}
-			
 			"g_pMemAllocFunc"
 			{
 				"library"		"server"
 				"windows"		"\x55\x8B\xEC\x53\x56\x8B\xF1\x8B\x16"
 			}
-			
 			"CGameMovement::ClipVelocity"
 			{
 				"library"		"server"
 				"linux"			"@_ZN13CGameMovement12ClipVelocityER6VectorS1_S1_ff"
 			}
-			
 			"CGameMovement::GetPlayerMaxs"
 			{
 				"library"		"server"
 				"linux"			"@_ZNK13CGameMovement13GetPlayerMaxsEb"
 			}
-			
 			"CGameMovement::GetPlayerMins"
 			{
 				"library"		"server"
 				"linux"			"@_ZNK13CGameMovement13GetPlayerMinsEb"
 			}
-			
 			"malloc"
 			{
 				"library"		"engine"
 				"linux"			"@_ZL7SzAllocPvj"
 			}
-			
 			"free"
 			{
 				"library"		"engine"
@@ -240,34 +196,28 @@
 				"windows"		"2"
 				"linux"			"2"
 			}
-			
 			"TraceRay"
 			{
 				"windows"		"4"
 				"linux"			"4"
 			}
-			
 			"TracePlayerBBox"
 			{
 				"windows"		"10"
 				"linux"			"9"
 			}
-			
 			"GetPlayerMaxs"
 			{
 				"windows"		"9"
 			}
-			
 			"GetPlayerMins"
 			{
 				"windows"		"8"
 			}
-			
 			"Malloc"
 			{
 				"windows"		"1"
 			}
-			
 			"Free"
 			{
 				"windows"		"5"
@@ -279,28 +229,11 @@
 	{
 		"Keys"
 		{
-			//EngineTrace interface name
 			"CEngineTrace"	"EngineTraceServer004"
-
-			// Added Core Offsets for CS:GO
-			"CGameMovement::player"				"4"
-			"CGameMovement::mv"					"8"
-
-			//CMoveData		
-			"CMoveData::m_vecVelocity"			"64"
-			//...
-			"CMoveData::m_vecAbsOrigin"			"172"
-			
-			//CGameTrace
 			"CGameTrace::m_pEnt"				"76"
 			"CGameTrace::hitbox"				"82"
 			"CGameTrace::size"					"86"
-			
-			//CBasePlayer
-			//Offset is relative to m_ubEFNoInterpParity netprop and will be substracted from it
 			"CBasePlayer::m_surfaceFriction"	"8"
-			
-			//Ray_t
 			"Ray_t::m_Start"					"0"
 			"Ray_t::m_Delta"					"16"
 			"Ray_t::m_StartOffset"				"32"
@@ -326,10 +259,8 @@
 					"signature" "g_pMemAllocFunc"
 					"read" "191"
 				}
-				
 				"read"	"0"
 			}
-			
 			"sm_pSingleton"
 			{
 				"windows"
@@ -342,7 +273,6 @@
 					"signature"	"CGameMovement::TryPlayerMove"
 					"read" "483"
 				}
-				
 				"read" "0"
 			}
 		}
@@ -353,19 +283,14 @@
 			{
 				"library"		"server"
 				"windows"		"\x55\x8B\xEC\x83\xE4\xF0\x83\xEC\x5C"
-				// Look for string CGameMovement::TracePlayerBBox
 				"linux"			"\x55\x89\xE5\x57\x56\x53\x83\xEC\x7C\x8B\x5D\x08\x8B\x7D\x10"
 			}
-			
 			"CGameMovement::TryPlayerMove"
 			{
 				"library"		"server"
 				"windows"		"\x55\x8B\xEC\x83\xE4\xF8\x81\xEC\x38\x01\x00\x00\xF3\x0F\x10\x35\x2A\x2A\x2A\x2A"
-				// Look for vtable with CGameMovement__TracePlayerBBox and count 29 entries down.
-// Look for a very long function if that doesn't work
 				"linux"			"\x55\x66\x0F\xEF\xDB\x89\xE5\x57\x56\x53\x81\xEC\x2A\x2A\x2A\x2A\x8B\x7D\x08"
 			}
-			
 			"g_pMemAllocFunc"
 			{
 				"library"		"server"
@@ -376,79 +301,91 @@
 		
 		"Offsets"
 		{
-			// 【关键修复】在此处区分了 Windows 和 Linux 的 Offset
+			// =========================================================
+			// 【关键修复】这 4 个必须放在 Offsets 里，不能放在 Keys 里！
+			// =========================================================
+			"CGameMovement::player"
+			{
+				"windows" "4"
+				"linux"   "4"
+			}
+			"CGameMovement::mv"
+			{
+				"windows" "8"
+				"linux"   "8"
+			}
+			"CMoveData::m_vecVelocity"
+			{
+				"windows" "64"
+				"linux"   "64"
+			}
+			"CMoveData::m_vecAbsOrigin"
+			{
+				"windows" "172"
+				"linux"   "172"
+			}
+			// =========================================================
+
 			"CBasePlayer::m_hGroundEntity"
 			{
 				"windows"	"332"
 				"linux"		"336"
 			}
-
 			"AddToTouched"
 			{
 				"windows"		"3"
 				"linux"			"3"
 			}
-			
 			"CanTraceRay"
 			{
 				"windows"		"3"
 				"linux"			"4"
 			}
-			
 			"TraceRay"
 			{
 				"windows"		"5"
 				"linux"			"5"
 			}
-			
 			"TraceRayAgainstLeafAndEntityList"
 			{
 				"windows"		"8"
 				"linux"			"8"
 			}
-			
 			"UnlockTraceFilter"
 			{
 				"windows"		"74"
 				"linux"			"75"
 			}
-			
 			"LockTraceFilter"
 			{
 				"windows"		"73"
 				"linux"			"74"
 			}
-			
 			"ClipVelocity"
 			{
 				"windows"		"49"
 				"linux"			"50"
 			}
-			
 			"TracePlayerBBox"
 			{
 				"windows"		"15"
 				"linux"			"14"
 			}
-			
 			"GetPlayerMaxs"
 			{
 				"windows"		"14"
 				"linux"			"35"
 			}
-			
 			"GetPlayerMins"
 			{
 				"windows"		"13"
 				"linux"			"34"
 			}
-			
 			"Malloc"
 			{
 				"windows"		"1"
 				"linux"			"0"
 			}
-			
 			"Free"
 			{
 				"windows"		"5"
