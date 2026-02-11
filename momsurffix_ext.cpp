@@ -1,27 +1,7 @@
-// ============================================================================
-// 【0】暴力执法区 (必须放在最最前面！)
-// ============================================================================
-// 即使 smsdk_config.h 是对的，构建系统也可能出鬼。
-// 所以我们先读配置，然后反手就是一个 #undef，强制枪毙 Metamod。
-#include "smsdk_config.h"
-#undef SMEXT_CONF_METAMOD 
-
-// ============================================================================
-// 【1】SourceMod 扩展核心
-// ============================================================================
-// 现在引入核心头文件时，环境已经是纯净的了
 #include "extension.h" 
-
-// ============================================================================
-// 【2】标准库
-// ============================================================================
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
-
-// ============================================================================
-// 【3】基础 SDK 头文件
-// ============================================================================
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
 #include <tier1/convar.h>
@@ -29,15 +9,9 @@
 #include <soundflags.h>
 #include <ihandleentity.h> 
 
-// ============================================================================
-// 【4】SDK 兼容垫片 (保留：这是为了修 CS:GO SDK 缺文件的问题)
-// ============================================================================
-
-// A. 类类型前置声明
 class CBasePlayer;
 class CBaseEntity;
 
-// B. 枚举类型垫片
 enum PLAYER_ANIM 
 { 
     PLAYER_IDLE = 0, 
@@ -48,18 +22,12 @@ enum PLAYER_ANIM
     PLAYER_ATTACK1
 };
 
-// ============================================================================
-// 【5】依赖上述类型的 SDK 头文件
-// ============================================================================
 #include <engine/IEngineTrace.h>
 #include <ispatialpartition.h> 
 #include <igamemovement.h> 
 #include <tier0/vprof.h>
 #include "simple_detour.h"
 
-// ============================================================================
-// 全局变量
-// ============================================================================
 #ifndef MAXPLAYERS
 #define MAXPLAYERS 65
 #endif
@@ -68,24 +36,11 @@ enum PLAYER_ANIM
 #endif
 
 MomSurfFixExt g_MomSurfFixExt;
-
-// ----------------------------------------------------------------------------
-// 扩展入口点 (双重保险)
-// ----------------------------------------------------------------------------
-// 即使上面的 #undef 失效（几乎不可能），这里的 #if 也能保证编译通过
-#if defined(SMEXT_CONF_METAMOD)
-    extern "C" __attribute__((visibility("default"))) IMSPlugin *GetSMExtAPI()
-    {
-        return &g_MomSurfFixExt;
-    }
-#else
-    SMEXT_LINK(&g_MomSurfFixExt);
-#endif
+SMEXT_LINK(&g_MomSurfFixExt);
 
 IEngineTrace *enginetrace = nullptr;
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
 
-// ConVar 定义
 ConVar g_cvRampBumpCount("momsurffix_ramp_bumpcount", "8", FCVAR_NOTIFY);
 ConVar g_cvRampInitialRetraceLength("momsurffix_ramp_retrace_length", "0.2", FCVAR_NOTIFY);
 ConVar g_cvNoclipWorkaround("momsurffix_enable_noclip_workaround", "1", FCVAR_NOTIFY);
@@ -102,9 +57,6 @@ CSimpleDetour *g_pDetour = nullptr;
 static CGameTrace g_TempTraces[MAXPLAYERS + 1];
 static Vector g_TempPlanes[MAX_CLIP_PLANES];
 
-// ----------------------------------------------------------------------------
-// 辅助类与函数 (保持不变)
-// ----------------------------------------------------------------------------
 class CTraceFilterSimple : public ITraceFilter
 {
 public:
@@ -190,9 +142,6 @@ bool IsValidMovementTrace(const CGameTrace &tr)
     return (tr.fraction > 0.0f || tr.startsolid);
 }
 
-// ----------------------------------------------------------------------------
-// Detour Logic
-// ----------------------------------------------------------------------------
 #ifndef THISCALL
     #define THISCALL
 #endif
@@ -330,9 +279,6 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     return blocked;
 }
 
-// ============================================================================
-// SourceMod 生命周期
-// ============================================================================
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
     char conf_error[255];
