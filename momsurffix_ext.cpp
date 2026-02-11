@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <dlfcn.h> // 【新增】用于手动获取接口
 
 // ============================================================================
 // 【2】基础 SDK 头文件
@@ -19,16 +20,15 @@
 #include <gametrace.h>
 #include <soundflags.h>
 #include <ihandleentity.h> 
+#include <interfaces/interfaces.h> // 用于 CVAR_INTERFACE_VERSION
 
 // ============================================================================
 // 【3】SDK 兼容垫片 (CS:GO SDK 必需)
 // ============================================================================
 
-// A. 类类型前置声明
 class CBasePlayer;
 class CBaseEntity;
 
-// B. 枚举类型垫片
 enum PLAYER_ANIM 
 { 
     PLAYER_IDLE = 0, 
@@ -63,25 +63,14 @@ MomSurfFixExt g_MomSurfFixExt;
 // ============================================================================
 // 【链接器冲突修复】
 // ============================================================================
-// 1. 为什么不写 GetSMExtAPI？
-//    报错显示 smsdk_ext.o 已经定义了 GetSMExtAPI。如果我们再写一个，就会导致
-//    "multiple definition" 错误。所以这里我们什么都不写，直接用 SDK 里的。
-//
-// 2. 为什么要写 g_pExtensionIface？
-//    SDK 里的 GetSMExtAPI 需要访问这个全局变量来获取我们的扩展实例。
-//    如果没有这行，编译能过，但服务器加载时会报 "undefined symbol: g_pExtensionIface"。
-
 SDKExtension *g_pExtensionIface = &g_MomSurfFixExt;
-
-// 3. 为什么不写 SMEXT_LINK 宏？
-//    因为这个宏会尝试生成 GetSMExtAPI，导致和第 1 点一样的冲突。
 
 // ============================================================================
 
 IEngineTrace *enginetrace = nullptr;
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
 
-// ConVar 定义
+// ConVar 定义 (这些之前没注册上，现在修好后就会有了)
 ConVar g_cvRampBumpCount("momsurffix_ramp_bumpcount", "8", FCVAR_NOTIFY);
 ConVar g_cvRampInitialRetraceLength("momsurffix_ramp_retrace_length", "0.2", FCVAR_NOTIFY);
 ConVar g_cvNoclipWorkaround("momsurffix_enable_noclip_workaround", "1", FCVAR_NOTIFY);
@@ -387,6 +376,37 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         gameconfs->CloseGameConfigFile(conf);
         return false;
     }
+
+    // ========================================================================
+    // 【关键修复】手动注册 ConVar
+    // ========================================================================
+    // 我们的扩展现在是半手动模式，需要手动告诉引擎 "我这里有参数"。
+    
+    // 1. 尝试从 vstdlib 库中获取 CreateInterface (CS:GO 标准位置)
+    void *hVStdLib = dlopen("libvstdlib_srv.so", RTLD_NOW | RTLD_NOLOAD);
+    if (!hVStdLib) hVStdLib = dlopen("libvstdlib.so", RTLD_NOW | RTLD_NOLOAD);
+    
+    ICvar *pCvar = nullptr;
+    if (hVStdLib) {
+        CreateInterfaceFn factory = (CreateInterfaceFn)dlsym(hVStdLib, "CreateInterface");
+        if (factory) {
+            pCvar = (ICvar *)factory(CVAR_INTERFACE_VERSION, nullptr);
+        }
+        dlclose(hVStdLib);
+    }
+    
+    // 2. 如果没找到，尝试从 engine 库获取 (备选)
+    if (!pCvar && pCreateInterface) {
+         CreateInterfaceFn factory = (CreateInterfaceFn)pCreateInterface;
+         pCvar = (ICvar *)factory(CVAR_INTERFACE_VERSION, nullptr);
+    }
+
+    // 3. 连接并注册
+    if (pCvar) {
+        g_pCVar = pCvar;       // 设置 Tier1 全局指针
+        ConVar_Register(0);    // 注册所有全局 ConVar
+    }
+    // ========================================================================
 
     gameconfs->CloseGameConfigFile(conf);
     return true;
