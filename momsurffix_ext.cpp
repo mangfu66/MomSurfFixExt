@@ -61,13 +61,13 @@ enum PLAYER_ANIM
 MomSurfFixExt g_MomSurfFixExt;
 
 // ----------------------------------------------------------------------------
-// 【物理修复】手动实现入口 (No More Macros)
+// 【物理修复】手动实现入口 (修正版)
 // ----------------------------------------------------------------------------
-// 我们不再使用 SMEXT_LINK 宏，而是直接写出它背后的 C++ 代码。
-// 这样无论 Metamod 宏是否存在，编译器都能看到一个合法的函数定义。
-// 这彻底绕过了 "expected constructor" 错误。
+// 之前报错是因为 IMSPlugin 类型不存在（因为我们移除了 Metamod SDK）。
+// 对于纯 SourceMod 扩展，标准的入口返回类型是 void*。
+// 这样改完后，既不需要 Metamod 头文件，也不需要宏支持，编译器一定能过。
 
-extern "C" __attribute__((visibility("default"))) IMSPlugin *GetSMExtAPI()
+extern "C" __attribute__((visibility("default"))) void *GetSMExtAPI()
 {
     return &g_MomSurfFixExt;
 }
