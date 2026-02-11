@@ -137,7 +137,7 @@ void TracePlayerBBox(const Vector &start, const Vector &end, IHandleEntity *pPla
 }
 
 // ----------------------------------------------------------------------------
-// Detour Logic (安全版：只修复卡顿，不乱改物理)
+// Detour Logic (最终优化版：无感平滑修复 + 高空接坡优化)
 // ----------------------------------------------------------------------------
 #ifndef THISCALL
     #define THISCALL
@@ -174,14 +174,18 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     // 条件 A: 速度必须足够快 (滑翔中)
     if (preSpeedSq < 250.0f * 250.0f) return result;
 
-    // 条件 B: 必须在空中
-    unsigned long hGroundEntity = *(unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
-    if (hGroundEntity != 0xFFFFFFFF) return result;
+    // 【优化1】移除严格的空中检查
+    // 原版这里会检查 GroundEntity，但这会导致撞坡的一瞬间（被误判为落地）无法触发修复。
+    // 注释掉它，允许修复逻辑在"误判落地"时依然生效。
+    // unsigned long hGroundEntity = *(unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
+    // if (hGroundEntity != 0xFFFFFFFF) return result;
 
     // 条件 C: 速度发生了非自然损失 (撞坡 BUG)
     float postSpeedSq = pVel->LengthSqr();
-    // 如果速度保持在 90% 以上，说明没出 BUG，不需要修
-    if (postSpeedSq > preSpeedSq * 0.9f) return result;
+    
+    // 【优化2】提高灵敏度 (0.9 -> 0.95)
+    // 让修复介入得更早，减少微小顿挫的累积。
+    if (postSpeedSq > preSpeedSq * 0.95f) return result;
 
     // 4. 执行修复
     IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
@@ -191,9 +195,10 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     Vector endPos = preOrigin + (preVelocity * flTimeLeft);
     TracePlayerBBox(preOrigin, endPos, pEntity, COLLISION_GROUP_PLAYER_MOVEMENT, trace);
 
+    // 只有当实际上是撞向陡峭斜坡时才修复 (z < 0.7 保证了不会在平地上乱飞)
     if (trace.DidHit() && trace.plane.normal.z < 0.7f)
     {
-        // 计算修正后的速度 (标准 ClipVelocity，不进行能量放大)
+        // 计算修正后的速度 (标准 ClipVelocity)
         float backoff = DotProduct(preVelocity, trace.plane.normal);
         
         // 只有当实际上是撞向墙面时才修复
@@ -201,18 +206,28 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
         {
             Vector fixVel = preVelocity - (trace.plane.normal * backoff);
 
-            // 【关键安全限制】防止飞天
-            // 限制最大垂直速度，避免被物理引擎弹射到天花板
-            if (fixVel.z > 600.0f) fixVel.z = 600.0f;
-            if (fixVel.z < -600.0f) fixVel.z = -600.0f;
+            // 【优化3】移除垂直速度限制
+            // 原版限制 600u/s 会导致高空下落接坡时速度被强制截断，产生"踩踏感"。
+            // 移除限制以保持动量守恒。
+            // if (fixVel.z > 600.0f) fixVel.z = 600.0f;
+            // if (fixVel.z < -600.0f) fixVel.z = -600.0f;
+
+            // ==============================================================
+            // 【优化4】防卡住微调 (平滑优化版 / Smooth Fix)
+            // ==============================================================
+            if (trace.plane.normal.z > 0.0f) 
+            {
+                 // A. 极小位移：0.01 的距离在客户端插值范围内，肉眼不可见，消除顿挫。
+                 *pOrigin = trace.endpos + (trace.plane.normal * 0.01f);
+
+                 // B. 微量推力：给物理引擎一个"离墙"的信号，防止下一帧误判卡住。
+                 // 这是不卡墙的关键。
+                 fixVel += trace.plane.normal * 1.0f;
+            }
 
             // 应用修复
             *pVel = fixVel;
             
-            // 防卡住微调 (Noclip Workaround)
-            if (trace.plane.normal.z > 0.0f) 
-                 *pOrigin = trace.endpos + (trace.plane.normal * 0.1f);
-
             if (g_cvDebug.GetBool())
                 Msg("[MomSurfFix] FIXED! Speed: %.0f -> %.0f\n", sqrt(preSpeedSq), fixVel.Length());
         }
