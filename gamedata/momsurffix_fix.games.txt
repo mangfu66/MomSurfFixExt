@@ -282,8 +282,9 @@
 			//EngineTrace interface name
 			"CEngineTrace"	"EngineTraceServer004"
 
-			// 【已修复】移除了这里硬编码的 m_hGroundEntity "332"
-			// "CBasePlayer::m_hGroundEntity"      "332"
+			// Added Core Offsets for CS:GO
+			"CGameMovement::player"				"4"
+			"CGameMovement::mv"					"8"
 
 			//CMoveData		
 			"CMoveData::m_vecVelocity"			"64"
@@ -361,7 +362,7 @@
 				"library"		"server"
 				"windows"		"\x55\x8B\xEC\x83\xE4\xF8\x81\xEC\x38\x01\x00\x00\xF3\x0F\x10\x35\x2A\x2A\x2A\x2A"
 				// Look for vtable with CGameMovement__TracePlayerBBox and count 29 entries down.
-				// Look for a very long function if that doesn't work
+// Look for a very long function if that doesn't work
 				"linux"			"\x55\x66\x0F\xEF\xDB\x89\xE5\x57\x56\x53\x81\xEC\x2A\x2A\x2A\x2A\x8B\x7D\x08"
 			}
 			
