@@ -54,7 +54,6 @@ enum PLAYER_ANIM
 MomSurfFixExt g_MomSurfFixExt;
 
 // 关键：定义全局接口指针，供 SDK 自动生成的入口使用
-// 因为 AMBuildScript 中包含了 smsdk_ext.cpp，它会自动生成 GetSMExtAPI
 SDKExtension *g_pExtensionIface = &g_MomSurfFixExt;
 
 IEngineTrace *enginetrace = nullptr;
@@ -137,7 +136,7 @@ void TracePlayerBBox(const Vector &start, const Vector &end, IHandleEntity *pPla
 }
 
 // ----------------------------------------------------------------------------
-// Detour Logic (最终优化版：无感平滑修复 + 高空接坡优化)
+// Detour Logic (最终纯净手感版：无顿挫、不卡墙、无怪异推力)
 // ----------------------------------------------------------------------------
 #ifndef THISCALL
     #define THISCALL
@@ -148,7 +147,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 {
     TryPlayerMove_t Original = (TryPlayerMove_t)g_pDetour->GetTrampoline();
     
-    // 双重保险：如果没开或者是空的，直接跑原版
+    // 双重保险
     if (!Original || !g_cvEnable.GetBool()) 
     {
         return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
@@ -166,63 +165,61 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     Vector preOrigin = *pOrigin;
     float preSpeedSq = preVelocity.LengthSqr();
 
-    // 2. 运行原版引擎 (完全信任原版物理)
+    // 2. 运行原版引擎
     int result = Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
 
-    // 3. 检查是否需要修复 (Ramp Bug 检测)
+    // 3. 检查是否需要修复
     
     // 条件 A: 速度必须足够快 (滑翔中)
     if (preSpeedSq < 250.0f * 250.0f) return result;
 
-    // 【优化1】移除严格的空中检查
-    // 原版这里会检查 GroundEntity，但这会导致撞坡的一瞬间（被误判为落地）无法触发修复。
-    // 注释掉它，允许修复逻辑在"误判落地"时依然生效。
+    // 条件 B: 【已优化】移除空中检查
+    // 允许在引擎误判落地的瞬间进行修复，解决接坡时的"卡顿/失效"
     // unsigned long hGroundEntity = *(unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
     // if (hGroundEntity != 0xFFFFFFFF) return result;
 
     // 条件 C: 速度发生了非自然损失 (撞坡 BUG)
     float postSpeedSq = pVel->LengthSqr();
     
-    // 【优化2】提高灵敏度 (0.9 -> 0.95)
-    // 让修复介入得更早，减少微小顿挫的累积。
-    if (postSpeedSq > preSpeedSq * 0.95f) return result;
+    // 【手感优化】将灵敏度从 0.95 调回 0.97
+    // 只有在真正发生 Bug 时才介入，避免在正常摩擦时干扰手感
+    if (postSpeedSq > preSpeedSq * 0.97f) return result;
 
     // 4. 执行修复
     IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
     CGameTrace trace;
     
-    // 重新探测前方，看看是不是撞到了斜坡
+    // 重新探测
     Vector endPos = preOrigin + (preVelocity * flTimeLeft);
     TracePlayerBBox(preOrigin, endPos, pEntity, COLLISION_GROUP_PLAYER_MOVEMENT, trace);
 
-    // 只有当实际上是撞向陡峭斜坡时才修复 (z < 0.7 保证了不会在平地上乱飞)
+    // 只有撞向陡峭斜坡时才修复 (z < 0.7)
     if (trace.DidHit() && trace.plane.normal.z < 0.7f)
     {
-        // 计算修正后的速度 (标准 ClipVelocity)
+        // 计算标准滑行速度
         float backoff = DotProduct(preVelocity, trace.plane.normal);
         
-        // 只有当实际上是撞向墙面时才修复
         if (backoff < 0.0f)
         {
             Vector fixVel = preVelocity - (trace.plane.normal * backoff);
 
-            // 【优化3】移除垂直速度限制
-            // 原版限制 600u/s 会导致高空下落接坡时速度被强制截断，产生"踩踏感"。
-            // 移除限制以保持动量守恒。
+            // 【优化3】保持移除垂直速度限制
+            // 防止高空落坡时速度被截断产生的"踩踏感"
             // if (fixVel.z > 600.0f) fixVel.z = 600.0f;
             // if (fixVel.z < -600.0f) fixVel.z = -600.0f;
 
             // ==============================================================
-            // 【优化4】防卡住微调 (平滑优化版 / Smooth Fix)
+            // 【手感核心优化】微小位置修正 (Anti-Stutter)
             // ==============================================================
             if (trace.plane.normal.z > 0.0f) 
             {
-                 // A. 极小位移：0.01 的距离在客户端插值范围内，肉眼不可见，消除顿挫。
+                 // 1. 保留 0.01 的微小位置修正
+                 //    这足以防止物理引擎判定"卡入墙体"导致的速度归零，
+                 //    同时因为距离极小，客户端插值能完美平滑过渡，消除"顿挫/瞬移感"。
                  *pOrigin = trace.endpos + (trace.plane.normal * 0.01f);
 
-                 // B. 微量推力：给物理引擎一个"离墙"的信号，防止下一帧误判卡住。
-                 // 这是不卡墙的关键。
-                 fixVel += trace.plane.normal * 1.0f;
+                 // 2. 【已删除】人工推力 (fixVel += 1.0f)
+                 //    删除了之前添加的向外推力，消除了滑行时的"怪异/发飘/排斥"手感。
             }
 
             // 应用修复
