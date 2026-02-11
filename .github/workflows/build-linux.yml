@@ -40,10 +40,39 @@ jobs:
       run: |
         mkdir -p sdks
         cd sdks
-        # ✅ 锁定 1.11-dev (CS:GO 扩展的最佳选择)
+        # 锁定 SM 1.11
         git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.11-dev sourcemod
-        # ❌ 彻底删除 Metamod 下载
+        # 移除 Metamod 下载 (完全不需要)
         git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo
+
+    - name: Overwrite smsdk_config.h (Force Clean Config)
+      run: |
+        # 强制覆盖配置文件，确保 Metamod 被禁用
+        cat > smsdk_config.h <<EOF
+        #ifndef _INCLUDE_SOURCEMOD_EXTENSION_CONFIG_H_
+        #define _INCLUDE_SOURCEMOD_EXTENSION_CONFIG_H_
+        
+        #define SMEXT_CONF_NAME         "MomSurfFix Extension"
+        #define SMEXT_CONF_DESCRIPTION  "Ports Momentum Mod surf/ramp glitch fix to CS:GO/CSS"
+        #define SMEXT_CONF_VERSION      "1.0.0"
+        #define SMEXT_CONF_AUTHOR       "GAMMACASE (original)"
+        #define SMEXT_CONF_URL          "https://github.com/454369453/MomSurfFixExt"
+        #define SMEXT_CONF_LOGTAG       "MOMSURFFIX"
+        #define SMEXT_CONF_LICENSE      "GPL"
+        #define SMEXT_CONF_DATESTRING   __DATE__
+        
+        #define SMEXT_ENABLE_GAMECONF
+        #define SMEXT_ENABLE_MEMUTILS
+        #define SMEXT_ENABLE_GAMEHELPERS
+        
+        // 绝对不开启 Metamod
+        // #define SMEXT_CONF_METAMOD
+        
+        #endif
+        EOF
+        
+        # 打印出来确认一下
+        cat smsdk_config.h
 
     - name: Configure
       env:
@@ -51,7 +80,7 @@ jobs:
         CXX: g++-9
       run: |
         rm -rf build
-        # ✅ 关键：移除 --mms-path，回归纯 SM 扩展模式
+        # 纯净构建，无 mms-path
         python3 configure.py -o build \
           --sdks=csgo \
           --targets=x86 \
