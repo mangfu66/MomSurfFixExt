@@ -79,7 +79,6 @@ void UpdateDetourState()
 {
     if (!g_pDetour) return;
 
-    // 打印状态变化，让你确认命令是否生效
     if (g_cvEnable.GetBool())
     {
         g_pDetour->Enable();
@@ -135,7 +134,7 @@ void TracePlayerBBox(const Vector &start, const Vector &end, IHandleEntity *pPla
 }
 
 // ----------------------------------------------------------------------------
-// Detour Logic (更灵敏的反应式修复)
+// Detour Logic (带详细诊断)
 // ----------------------------------------------------------------------------
 #ifndef THISCALL
     #define THISCALL
@@ -146,7 +145,6 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 {
     TryPlayerMove_t Original = (TryPlayerMove_t)g_pDetour->GetTrampoline();
     
-    // 【双重保险】如果开关关闭，强制执行原版逻辑，不运行任何额外代码
     if (!Original || !g_cvEnable.GetBool()) 
     {
         return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
@@ -159,33 +157,48 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     Vector *pVel = (Vector *)((uintptr_t)mv + g_off_VecVelocity);
     Vector *pOrigin = (Vector *)((uintptr_t)mv + g_off_VecAbsOrigin);
 
-    // 1. 记录原始状态
     Vector preVelocity = *pVel;
     Vector preOrigin = *pOrigin;
     float preSpeedSq = preVelocity.LengthSqr();
 
-    // 2. 运行原版引擎
+    // 运行原版引擎
     int result = Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
 
-    // 3. 检查是否需要修复
-    
-    // 必须是滑翔状态 (速度 > 250)
-    if (preSpeedSq < 250.0f * 250.0f) return result;
+    // --- 诊断模式逻辑 ---
+    bool bDebug = g_cvDebug.GetBool();
 
-    // 必须在空中
+    // 1. 速度检查
+    if (preSpeedSq < 250.0f * 250.0f) 
+    {
+        // if (bDebug) Msg("[MomSurfFix] Skip: Too slow\n");
+        return result;
+    }
+
+    // 2. 空中检查
     unsigned long hGroundEntity = *(unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
-    if (hGroundEntity != 0xFFFFFFFF) return result;
+    bool bIsAirborne = (hGroundEntity == 0xFFFFFFFF);
+    if (!bIsAirborne) 
+    {
+        // if (bDebug) Msg("[MomSurfFix] Skip: On Ground\n");
+        return result;
+    }
 
-    // 【调整阈值】只要速度损失超过 10% 就尝试修复 (原版是 30%)
-    // 这会让插件更灵敏，更容易触发修复，不再感觉是“空壳”
+    // 3. 碰撞检查
     float postSpeedSq = pVel->LengthSqr();
-    if (postSpeedSq > preSpeedSq * 0.9f) return result;
+    
+    // 如果速度没怎么掉（> 90%），说明没出 BUG
+    if (postSpeedSq > preSpeedSq * 0.9f) 
+    {
+        // if (bDebug) Msg("[MomSurfFix] Skip: No collision/loss (%.0f -> %.0f)\n", sqrt(preSpeedSq), sqrt(postSpeedSq));
+        return result;
+    }
 
-    // 4. 执行修复
+    // 到了这里，说明：速度快 + 在空中 + 速度突然没了
+    // 这就是我们要修的 BUG！
+
     IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
     CGameTrace trace;
     
-    // 探测前方
     Vector endPos = preOrigin + (preVelocity * flTimeLeft);
     TracePlayerBBox(preOrigin, endPos, pEntity, COLLISION_GROUP_PLAYER_MOVEMENT, trace);
 
@@ -196,20 +209,29 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
         {
             Vector fixVel = preVelocity - (trace.plane.normal * backoff);
 
-            // 安全限速 (800) 防止飞天
+            // 安全限速
             if (fixVel.z > 800.0f) fixVel.z = 800.0f;
 
             // 应用修复
             *pVel = fixVel;
             
-            // 推离墙体
             if (trace.plane.normal.z > 0.0f) 
                  *pOrigin = trace.endpos + (trace.plane.normal * 0.1f);
 
-            // 调试信息：如果开启 debug，你会看到这条消息，证明插件活在
-            if (g_cvDebug.GetBool())
-                Msg("[MomSurfFix] Fixed Ramp Bug! Speed kept: %.0f -> %.0f\n", sqrt(preSpeedSq), fixVel.Length());
+            if (bDebug)
+                Msg("[MomSurfFix] FIXED! %.0f -> %.0f | Normal: %.2f %.2f %.2f\n", 
+                    sqrt(preSpeedSq), fixVel.Length(), 
+                    trace.plane.normal.x, trace.plane.normal.y, trace.plane.normal.z);
         }
+        else if (bDebug)
+        {
+             Msg("[MomSurfFix] Skip: Moving away from wall\n");
+        }
+    }
+    else if (bDebug && postSpeedSq < preSpeedSq * 0.5f)
+    {
+        // 如果原版减速了，但我们射线没探测到墙，说明可能是奇怪的几何体边缘
+        Msg("[MomSurfFix] Warn: Lost speed but trace hit nothing!\n");
     }
 
     return result;
@@ -238,11 +260,24 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    if (!conf->GetOffset("CBasePlayer::m_hGroundEntity", &g_off_GroundEntity))
+    // 【智能获取 Offset】
+    // 不再盲目信任 gamedata，而是优先询问引擎 "m_hGroundEntity 在哪？"
+    // 这能彻底解决 "扩展以为你在地上，但其实你在天上" 的判断错误。
+    sm_sendprop_info_t info;
+    if (gamehelpers->FindSendPropInfo("CBasePlayer", "m_hGroundEntity", &info))
     {
-         snprintf(error, maxlength, "Missing 'CBasePlayer::m_hGroundEntity'.");
-         gameconfs->CloseGameConfigFile(conf);
-         return false;
+        g_off_GroundEntity = info.actual_offset;
+        // Msg("[MomSurfFix] Auto-found m_hGroundEntity at %d\n", g_off_GroundEntity);
+    }
+    else
+    {
+        // 如果自动查找失败（极少见），才回退到读取文件
+        if (!conf->GetOffset("CBasePlayer::m_hGroundEntity", &g_off_GroundEntity))
+        {
+             snprintf(error, maxlength, "Missing 'CBasePlayer::m_hGroundEntity'.");
+             gameconfs->CloseGameConfigFile(conf);
+             return false;
+        }
     }
 
     void *pTryPlayerMoveAddr = nullptr;
@@ -253,10 +288,7 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 初始化 Detour 对象
     g_pDetour = new CSimpleDetour(pTryPlayerMoveAddr, (void *)Detour_TryPlayerMove);
-    
-    // 立即根据 ConVar 初始值设置状态
     UpdateDetourState();
 
     void *pCreateInterface = nullptr;
@@ -273,7 +305,6 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 手动注册 ConVar
     void *hVStdLib = dlopen("libvstdlib_srv.so", RTLD_NOW | RTLD_NOLOAD);
     if (!hVStdLib) hVStdLib = dlopen("libvstdlib.so", RTLD_NOW | RTLD_NOLOAD);
     
@@ -318,3 +349,11 @@ bool MomSurfFixExt::QueryRunning(char *error, size_t maxlength)
 {
     return true;
 }
+```
+
+### 🔎 如何使用诊断模式？
+
+1.  上传新的 `.so` 文件并重启服务器（或者 `sm exts reload`）。
+2.  进入服务器，在控制台输入：
+    ```bash
+    momsurffix_debug 1
