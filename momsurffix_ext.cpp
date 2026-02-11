@@ -9,7 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
-#include <dlfcn.h> // 【新增】用于手动获取接口
+#include <dlfcn.h> 
 
 // ============================================================================
 // 【2】基础 SDK 头文件
@@ -20,12 +20,11 @@
 #include <gametrace.h>
 #include <soundflags.h>
 #include <ihandleentity.h> 
-#include <interfaces/interfaces.h> // 用于 CVAR_INTERFACE_VERSION
+#include <interfaces/interfaces.h> 
 
 // ============================================================================
-// 【3】SDK 兼容垫片 (CS:GO SDK 必需)
+// 【3】SDK 兼容垫片
 // ============================================================================
-
 class CBasePlayer;
 class CBaseEntity;
 
@@ -59,18 +58,12 @@ enum PLAYER_ANIM
 #endif
 
 MomSurfFixExt g_MomSurfFixExt;
-
-// ============================================================================
-// 【链接器冲突修复】
-// ============================================================================
 SDKExtension *g_pExtensionIface = &g_MomSurfFixExt;
-
-// ============================================================================
 
 IEngineTrace *enginetrace = nullptr;
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
 
-// ConVar 定义 (这些之前没注册上，现在修好后就会有了)
+// ConVar 定义
 ConVar g_cvRampBumpCount("momsurffix_ramp_bumpcount", "8", FCVAR_NOTIFY);
 ConVar g_cvRampInitialRetraceLength("momsurffix_ramp_retrace_length", "0.2", FCVAR_NOTIFY);
 ConVar g_cvNoclipWorkaround("momsurffix_enable_noclip_workaround", "1", FCVAR_NOTIFY);
@@ -176,7 +169,7 @@ bool IsValidMovementTrace(const CGameTrace &tr)
 }
 
 // ----------------------------------------------------------------------------
-// Detour Logic
+// Detour Logic (带保险丝的修正版)
 // ----------------------------------------------------------------------------
 #ifndef THISCALL
     #define THISCALL
@@ -185,15 +178,45 @@ typedef int (THISCALL *TryPlayerMove_t)(void *, Vector *, CGameTrace *, float);
 
 int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
 {
+    TryPlayerMove_t Original = (TryPlayerMove_t)g_pDetour->GetTrampoline();
+    if (!Original) return 0;
+
+    // 【保险丝 0】总开关：如果 CVAR 关了，直接用原版逻辑
+    if (!g_cvNoclipWorkaround.GetBool())
+    {
+        return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
+    }
+
     void *pPlayer = *(void **)((uintptr_t)pThis + g_off_Player);
     CMoveData *mv = *(CMoveData **)((uintptr_t)pThis + g_off_MV);
 
-    TryPlayerMove_t Original = (TryPlayerMove_t)g_pDetour->GetTrampoline();
+    if (!pPlayer || !mv) return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
 
-    if (!pPlayer || !mv || !Original) return 0;
+    Vector *pVel = (Vector *)((uintptr_t)mv + g_off_VecVelocity);
+    Vector vel = *pVel; 
+
+    // 【保险丝 1】速度阈值
+    // 只有速度超过 250 (跑步速度) 时才介入。
+    // 这解决了你在起点、梯子、静止时的瞬移和抖动问题。
+    if (vel.LengthSqr() < (250.0f * 250.0f))
+    {
+        return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft); 
+    }
+
+    // 【保险丝 2】地面检测
+    // 如果玩家在地上 (hGroundEntity != -1)，绝对不要介入。
+    // 地面摩擦力和步进逻辑非常复杂，交给原版引擎处理。
+    unsigned long hGroundEntity = *(unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
+    bool bIsAirborne = (hGroundEntity == 0xFFFFFFFF); 
+
+    if (!bIsAirborne)
+    {
+        return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
+    }
+
+    // --- 以下代码只会在你 空中高速滑翔 时执行 ---
 
     IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
-
     VPROF_BUDGET("Momentum_TryPlayerMove", VPROF_BUDGETGROUP_PLAYER);
 
     int client = pEntity->GetRefEHandle().GetEntryIndex();
@@ -201,16 +224,8 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     CGameTrace &pm = g_TempTraces[client];
     pm = CGameTrace(); 
 
-    Vector *pVel = (Vector *)((uintptr_t)mv + g_off_VecVelocity);
-    Vector vel = *pVel; 
-
     Vector *pOrigin = (Vector *)((uintptr_t)mv + g_off_VecAbsOrigin);
     Vector origin = *pOrigin;
-    
-    if (vel.LengthSqr() < 0.000001f)
-    {
-        return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft); 
-    }
 
     float time_left = flTimeLeft;
     int numbumps = g_cvRampBumpCount.GetInt();
@@ -252,15 +267,13 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
         g_TempPlanes[numplanes] = pm.plane.normal;
         numplanes++;
 
-        unsigned long hGroundEntity = *(unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
-        bool bIsAirborne = (hGroundEntity == 0xFFFFFFFF); 
-
-        if (bumpcount > 0 && bIsAirborne && !IsValidMovementTrace(pm))
+        // 这里的 bIsAirborne 已经被我们在循环外检查过了，但保留逻辑不变
+        if (bumpcount > 0 && !IsValidMovementTrace(pm))
         {
             stuck_on_ramp = true;
         }
 
-        if (g_cvNoclipWorkaround.GetBool() && stuck_on_ramp && vel.z >= -6.25f && vel.z <= 0.0f && !has_valid_plane)
+        if (stuck_on_ramp && vel.z >= -6.25f && vel.z <= 0.0f && !has_valid_plane)
         {
             FindValidPlane(pGM, pEntity, origin, vel, valid_plane);
             has_valid_plane = (valid_plane.LengthSqr() > 0.000001f);
@@ -316,7 +329,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 }
 
 // ============================================================================
-// SourceMod 生命周期
+// SourceMod 生命周期 (保持不变)
 // ============================================================================
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
@@ -377,12 +390,6 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // ========================================================================
-    // 【关键修复】手动注册 ConVar
-    // ========================================================================
-    // 我们的扩展现在是半手动模式，需要手动告诉引擎 "我这里有参数"。
-    
-    // 1. 尝试从 vstdlib 库中获取 CreateInterface (CS:GO 标准位置)
     void *hVStdLib = dlopen("libvstdlib_srv.so", RTLD_NOW | RTLD_NOLOAD);
     if (!hVStdLib) hVStdLib = dlopen("libvstdlib.so", RTLD_NOW | RTLD_NOLOAD);
     
@@ -395,18 +402,15 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         dlclose(hVStdLib);
     }
     
-    // 2. 如果没找到，尝试从 engine 库获取 (备选)
     if (!pCvar && pCreateInterface) {
          CreateInterfaceFn factory = (CreateInterfaceFn)pCreateInterface;
          pCvar = (ICvar *)factory(CVAR_INTERFACE_VERSION, nullptr);
     }
 
-    // 3. 连接并注册
     if (pCvar) {
-        g_pCVar = pCvar;       // 设置 Tier1 全局指针
-        ConVar_Register(0);    // 注册所有全局 ConVar
+        g_pCVar = pCvar;       
+        ConVar_Register(0);    
     }
-    // ========================================================================
 
     gameconfs->CloseGameConfigFile(conf);
     return true;
