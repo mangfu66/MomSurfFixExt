@@ -1,0 +1,124 @@
+# AMBuildScript
+import os
+
+# Detect compiler
+cxx = builder.DetectCxx(target_arch=builder.options.targets)
+
+# Get SDK name for output filename
+sdk_name = builder.options.sdks if builder.options.sdks else 'unknown'
+library = cxx.Library('momsurffix2_{}.ext'.format(sdk_name))
+
+# Source files
+sm_path = builder.options.sm_path
+library.sources += [
+    'momsurffix_ext2.cpp',
+    'simple_detour.cpp',
+    os.path.join(sm_path, 'public', 'smsdk_ext.cpp')
+]
+
+# Get path options
+hl2sdk_path = builder.options.hl2sdk_path
+
+# Include paths
+library.compiler.includes += [
+    builder.sourcePath,
+    os.path.join(sm_path, 'public'),
+    os.path.join(sm_path, 'public/extensions'),
+    os.path.join(sm_path, 'public/sourcepawn'),
+    os.path.join(sm_path, 'sourcepawn/include'),
+    os.path.join(sm_path, 'public/amtl'),
+    os.path.join(sm_path, 'public/amtl/amtl'),
+    os.path.join(hl2sdk_path, 'public'),
+    os.path.join(hl2sdk_path, 'public/engine'),
+    os.path.join(hl2sdk_path, 'public/mathlib'),
+    os.path.join(hl2sdk_path, 'public/vstdlib'),
+    os.path.join(hl2sdk_path, 'public/tier0'),
+    os.path.join(hl2sdk_path, 'public/tier1'),
+    os.path.join(hl2sdk_path, 'game/shared'),
+    os.path.join(hl2sdk_path, 'common'),
+]
+
+# Core defines
+library.compiler.defines += [
+    'SOURCEMOD_BUILD',
+    'HAVE_STRING_H',
+    'SE_EPISODEONE',
+    'COMPILER_GCC',
+    '_LINUX',
+    'LINUX',
+    'POSIX',
+    '_POSIX',
+    '_NATIVE_WCHAR_T_DEFINED',
+    'register=',
+    'GNUC',
+]
+
+# Compiler flags
+library.compiler.cxxflags += [
+    '-std=c++17',
+    '-fno-threadsafe-statics',
+    '-fvisibility=hidden',
+    '-fshort-wchar',
+    '-fms-extensions',
+    '-msse',
+    '-msse2',
+    '-Wno-deprecated-declarations',
+    '-Wno-register',
+    '-Wno-invalid-offsetof',
+]
+
+# Link settings
+libdir = os.path.join(hl2sdk_path, 'lib', 'linux')
+library.compiler.linkflags += ['-lm', '-ldl']
+
+if os.path.exists(libdir):
+    library.compiler.linkflags += ['-L' + libdir]
+
+# Static libraries (only if they exist)
+for static_lib in ['tier1_i486.a', 'mathlib_i486.a', 'interfaces_i486.a']:
+    lib_path = os.path.join(libdir, static_lib)
+    if os.path.exists(lib_path):
+        library.compiler.postlink += [lib_path]
+
+# Dynamic libraries (only if they exist)
+if os.path.exists(os.path.join(libdir, 'libtier0_srv.so')):
+    library.compiler.postlink += ['-ltier0_srv']
+elif os.path.exists(os.path.join(libdir, 'libtier0.so')):
+    library.compiler.postlink += ['-ltier0']
+
+if os.path.exists(os.path.join(libdir, 'libvstdlib_srv.so')):
+    library.compiler.postlink += ['-lvstdlib_srv']
+elif os.path.exists(os.path.join(libdir, 'libvstdlib.so')):
+    library.compiler.postlink += ['-lvstdlib']
+
+class MomSurfFix:
+    pass
+
+MomSurfFix.binary = builder.Add(library).binary
+
+# Package
+builder.SetBuildFolder('package')
+
+folder_list = [
+    'addons/sourcemod/extensions',
+    'addons/sourcemod/gamedata',
+    'addons/sourcemod/scripting/include',
+    'cfg/sourcemod',
+]
+
+folder_map = {}
+for folder in folder_list:
+    folder_map[folder] = builder.AddFolder(os.path.normpath(folder))
+
+def CopyFiles(src, dest, files):
+    for f in files:
+        builder.AddCopy(os.path.join(builder.sourcePath, src, f), folder_map[dest])
+
+CopyFiles('gamedata', 'addons/sourcemod/gamedata',            ['momsurffix_fix2.games.txt'])
+CopyFiles('include',  'addons/sourcemod/scripting/include',   ['momsurffix_ext2.inc'])
+builder.AddCopy(MomSurfFix.binary, folder_map['addons/sourcemod/extensions'])
+
+# Copy autoload file so the extension loads automatically
+autoload_src = os.path.join(builder.sourcePath, 'autoload', 'momsurffix2_{}.autoload'.format(sdk_name))
+if os.path.exists(autoload_src):
+    builder.AddCopy(autoload_src, folder_map['addons/sourcemod/extensions'])
