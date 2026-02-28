@@ -4,7 +4,6 @@
 	{
 		"Keys"
 		{
-			// 这里保留原始的 Keys 也没关系，作为参考
 			"cplane_t::normal"					"0"
 			"cplane_t::dist"					"12"
 			"cplane_t::type"					"16"
@@ -59,6 +58,9 @@
 		"Keys"
 		{
 			"CEngineTrace"	"EngineTraceServer003"
+			"CMoveData::m_nPlayerHandle"		"4"
+			"CMoveData::m_vecVelocity"			"68"
+			"CMoveData::m_vecAbsOrigin"			"156"
 			"CGameTrace::m_pEnt"				"74"
 			"CGameTrace::hitbox"				"80"
 			"CGameTrace::size"					"84"
@@ -302,7 +304,7 @@
 		"Offsets"
 		{
 			// =========================================================
-			// 【关键修复】这 4 个必须放在 Offsets 里，不能放在 Keys 里！
+			// These 4 must be in Offsets, not Keys
 			// =========================================================
 			"CGameMovement::player"
 			{

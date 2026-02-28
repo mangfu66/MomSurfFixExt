@@ -1,11 +1,11 @@
 # AMBuildScript
 import os
 
-# 1. 检测编译器
+# Detect compiler
 cxx = builder.DetectCxx(target_arch=builder.options.targets)
 library = cxx.Library('momsurffix_ext.ext')
 
-# 2. 源文件
+# Source files
 sm_path = builder.options.sm_path
 library.sources += [
     'momsurffix_ext.cpp',
@@ -13,10 +13,10 @@ library.sources += [
     os.path.join(sm_path, 'public', 'smsdk_ext.cpp')
 ]
 
-# 3. 获取其他路径参数 (无 Metamod)
+# Get path options
 hl2sdk_path = builder.options.hl2sdk_path
 
-# 4. 头文件包含路径 (无 Metamod)
+# Include paths
 library.compiler.includes += [
     builder.sourcePath,
     os.path.join(sm_path, 'public'),
@@ -35,7 +35,7 @@ library.compiler.includes += [
     os.path.join(hl2sdk_path, 'common'),
 ]
 
-# 5. 核心宏定义
+# Core defines
 library.compiler.defines += [
     'SOURCEMOD_BUILD',
     'HAVE_STRING_H',
@@ -46,11 +46,11 @@ library.compiler.defines += [
     'POSIX',
     '_POSIX',
     '_NATIVE_WCHAR_T_DEFINED',
-    'register=', 
-    'GNUC', 
+    'register=',
+    'GNUC',
 ]
 
-# 6. 编译器标志
+# Compiler flags
 library.compiler.cxxflags += [
     '-std=c++17',
     '-fno-threadsafe-statics',
@@ -64,7 +64,7 @@ library.compiler.cxxflags += [
     '-Wno-invalid-offsetof',
 ]
 
-# 链接设置
+# Link settings
 libdir = os.path.join(hl2sdk_path, 'lib', 'linux')
 library.compiler.linkflags += ['-lm', '-ldl', '-L' + libdir]
 
@@ -84,4 +84,30 @@ library.compiler.postlink += [
     '-l' + name_vstdlib,
 ]
 
-builder.Add(library)
+class MomSurfFix:
+    pass
+
+MomSurfFix.binary = builder.Add(library).binary
+
+# Package
+builder.SetBuildFolder('package')
+
+folder_list = [
+    'addons/sourcemod/extensions',
+    'addons/sourcemod/gamedata',
+    'addons/sourcemod/scripting/include',
+    'cfg/sourcemod',
+]
+
+folder_map = {}
+for folder in folder_list:
+    folder_map[folder] = builder.AddFolder(os.path.normpath(folder))
+
+def CopyFiles(src, dest, files):
+    for f in files:
+        builder.AddCopy(os.path.join(builder.sourcePath, src, f), folder_map[dest])
+
+CopyFiles('gamedata', 'addons/sourcemod/gamedata',            ['momsurffix_fix.games.txt'])
+CopyFiles('include',  'addons/sourcemod/scripting/include',   ['momsurffix_ext.inc'])
+builder.AddCopy(os.path.join(builder.sourcePath, 'momsurffix.cfg'), folder_map['cfg/sourcemod'])
+builder.AddCopy(MomSurfFix.binary, folder_map['addons/sourcemod/extensions'])

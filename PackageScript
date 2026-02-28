@@ -1,0 +1,32 @@
+# vim: set ts=8 sts=2 sw=2 tw=99 et ft=python:
+import os
+
+builder.SetBuildFolder('package')
+
+folder_list = [
+    'addons/sourcemod/extensions',
+    'addons/sourcemod/gamedata',
+    'addons/sourcemod/scripting/include',
+    'cfg/sourcemod',
+]
+
+folder_map = {}
+for folder in folder_list:
+    norm_folder = os.path.normpath(folder)
+    folder_map[folder] = builder.AddFolder(norm_folder)
+
+def CopyFiles(src, dest, files):
+    dest_entry = folder_map[dest]
+    for source_file in files:
+        source_path = os.path.join(builder.sourcePath, src, source_file)
+        builder.AddCopy(source_path, dest_entry)
+
+CopyFiles('gamedata', 'addons/sourcemod/gamedata', ['momsurffix_fix.games.txt'])
+CopyFiles('include',  'addons/sourcemod/scripting/include', ['momsurffix_ext.inc'])
+
+builder.AddCopy(
+    os.path.join(builder.sourcePath, 'momsurffix.cfg'),
+    folder_map['cfg/sourcemod']
+)
+
+builder.AddCopy(MomSurfFix.binary, folder_map['addons/sourcemod/extensions'])

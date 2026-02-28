@@ -1,32 +1,22 @@
-// ============================================================================
-// 【0】SourceMod 扩展核心
-// ============================================================================
-#include "extension.h" 
+#include "extension.h"
 
-// ============================================================================
-// 【1】标准库
-// ============================================================================
+
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
-#include <dlfcn.h> 
+#include <dlfcn.h>
 #include <algorithm>
 #include <cmath>
 
-// ============================================================================
-// 【2】基础 SDK 头文件
-// ============================================================================
+
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
 #include <tier1/convar.h>
 #include <gametrace.h>
 #include <soundflags.h>
-#include <ihandleentity.h> 
-#include <interfaces/interfaces.h> 
+#include <ihandleentity.h>
+#include <interfaces/interfaces.h>
 
-// ============================================================================
-// 【3】SDK 兼容垫片
-// ============================================================================
 class CBasePlayer;
 class CBaseEntity;
 
@@ -35,46 +25,51 @@ enum PLAYER_ANIM
     PLAYER_IDLE = 0, PLAYER_WALK, PLAYER_JUMP, PLAYER_SUPERJUMP, PLAYER_DIE, PLAYER_ATTACK1
 };
 
-// ============================================================================
-// 【4】依赖上述类型的 SDK 头文件
-// ============================================================================
 #include <engine/IEngineTrace.h>
-#include <ispatialpartition.h> 
-#include <igamemovement.h> 
+#include <ispatialpartition.h>
+#include <igamemovement.h>
 #include <tier0/vprof.h>
 #include "simple_detour.h"
 
-// ============================================================================
-// 全局变量
-// ============================================================================
+// Global variables
 #ifndef MAXPLAYERS
 #define MAXPLAYERS 65
 #endif
 
 MomSurfFixExt g_MomSurfFixExt;
 
-// 关键：定义全局接口指针，供 SDK 自动生成的入口使用
 SDKExtension *g_pExtensionIface = &g_MomSurfFixExt;
 
 IEngineTrace *enginetrace = nullptr;
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
 
-// 前向声明回调
+// Forward declaration for callback
 void OnEnableChanged(IConVar *var, const char *pOldValue, float flOldValue);
 
-// ConVar 定义
+// ConVars
 ConVar g_cvEnable("momsurffix_enable", "1", 0, "Enable Surf Bug Fix", OnEnableChanged);
 ConVar g_cvDebug("momsurffix_debug", "0", 0, "Print debug info");
 
-// --- 参数化调整 ---
+// Sensitivity threshold
 ConVar g_cvSensitivity("momsurffix_sensitivity", "0.97", 0, "Sensitivity threshold for speed loss detection (0.90 - 0.99)");
-ConVar g_cvAntiStutterOffset("momsurffix_antistutter_offset", "0.01", 0, "Micro position adjustment to prevent stuttering (units)");
 
-// 【新增】斜坡判定与落地判定参数
 ConVar g_cvRampNormalZ("momsurffix_ramp_normalz", "0.7", 0, "Slope normal Z threshold. Surfaces steeper than this (lower Z) are treated as ramps/walls. (Default 0.7 ~= 45 deg)");
-ConVar g_cvLandingSpeed("momsurffix_landing_speed", "100.0", 0, "Vertical speed threshold. Landings slower than this are treated as smooth surf exits (no view punch). (Default 100.0)");
 
-// 偏移量定义
+ConVar g_cvAdaptiveMode("momsurffix_adaptive_mode", "1", 0, "Adaptive sensitivity mode (0=fixed, 1=speed-based)");
+ConVar g_cvSpeedThresholdLow("momsurffix_speed_threshold_low", "500.0", 0, "Speed threshold for low-speed mode (units/sec)");
+ConVar g_cvSpeedThresholdHigh("momsurffix_speed_threshold_high", "1000.0", 0, "Speed threshold for high-speed mode (units/sec)");
+ConVar g_cvSensitivityLow("momsurffix_sensitivity_low", "0.95", 0, "Sensitivity for low speed (< threshold_low)");
+ConVar g_cvSensitivityMid("momsurffix_sensitivity_mid", "0.97", 0, "Sensitivity for mid speed (threshold_low ~ threshold_high)");
+ConVar g_cvSensitivityHigh("momsurffix_sensitivity_high", "0.99", 0, "Sensitivity for high speed (> threshold_high)");
+
+ConVar g_cvMinSpeed("momsurffix_min_speed", "250.0", 0,
+    "Minimum speed (u/s) required to trigger fix. Default 250 = max walk speed.");
+
+ConVar g_cvEnableSmoothTransition("momsurffix_enable_smooth_transition", "1", 0,
+    "Enable smooth sensitivity transition between speed tiers (linear interpolation)");
+
+
+// Offsets
 int g_off_Player = -1;
 int g_off_MV = -1;
 int g_off_VecVelocity = -1; 
@@ -83,14 +78,55 @@ int g_off_GroundEntity = -1;
 int g_off_VecMins = -1;
 int g_off_VecMaxs = -1;
 
-// 兼容性检查偏移
+// Compatibility offsets
 int g_off_WaterLevel = -1;
 int g_off_MoveType = -1;
 
 CSimpleDetour *g_pDetour = nullptr;
 
+// ============================================================================
+// Statistics
+// ============================================================================
+struct FixStatistics {
+    int totalFixes;
+    int fixesBySpeed[3];  // [low < 500, mid 500-1000, high > 1000]
+    float totalSpeedLoss;
+    float totalSpeedGain;
+    int sampleCount;
+
+    float GetAvgSpeedLoss() const {
+        return sampleCount > 0 ? totalSpeedLoss / sampleCount : 0.0f;
+    }
+
+    float GetAvgSpeedGain() const {
+        return sampleCount > 0 ? totalSpeedGain / sampleCount : 0.0f;
+    }
+
+    void Reset() {
+        totalFixes = 0;
+        fixesBySpeed[0] = fixesBySpeed[1] = fixesBySpeed[2] = 0;
+        totalSpeedLoss = totalSpeedGain = 0.0f;
+        sampleCount = 0;
+    }
+};
+
+FixStatistics g_GlobalStats = {0};
+
+// ============================================================================
+// Forward + Native interface
+// ============================================================================
+struct LastClipData {
+    float inVel[3];
+    float planeNormal[3];
+    float outVel[3];
+    float timestamp;
+};
+
+LastClipData g_LastClipData[MAXPLAYERS + 1];
+IForward *g_pOnClipVelocity = nullptr;
+
 // ----------------------------------------------------------------------------
-// 动态开关逻辑
+// Dynamic enable/disable
 // ----------------------------------------------------------------------------
 void UpdateDetourState()
 {
@@ -114,7 +150,7 @@ void OnEnableChanged(IConVar *var, const char *pOldValue, float flOldValue)
 }
 
 // ----------------------------------------------------------------------------
-// 辅助类与函数
+// Helper classes and functions
 // ----------------------------------------------------------------------------
 class CTraceFilterSimple : public ITraceFilter
 {
@@ -140,10 +176,10 @@ private:
 void TracePlayerBBox(const Vector &start, const Vector &end, void *pPlayer, IHandleEntity *pPlayerEntity, int collisionGroup, CGameTrace &pm)
 {
     if (!enginetrace) return;
-    
+
     Ray_t ray;
     Vector mins, maxs;
-    
+
     if (g_off_VecMins != -1 && g_off_VecMaxs != -1)
     {
         mins = *(Vector *)((uintptr_t)pPlayer + g_off_VecMins);
@@ -152,7 +188,7 @@ void TracePlayerBBox(const Vector &start, const Vector &end, void *pPlayer, IHan
     else
     {
         mins = Vector(-16, -16, 0);
-        maxs = Vector(16, 16, 72); 
+        maxs = Vector(16, 16, 72);
     }
 
     ray.Init(start, end, mins, maxs);
@@ -162,13 +198,106 @@ void TracePlayerBBox(const Vector &start, const Vector &end, void *pPlayer, IHan
 }
 
 // ----------------------------------------------------------------------------
-// Detour Logic (全参数化完全体)
+// Adaptive sensitivity system
+// ----------------------------------------------------------------------------
+float GetAdaptiveSensitivity(float speed)
+{
+    int mode = g_cvAdaptiveMode.GetInt();
+    if (mode == 0) {
+        return g_cvSensitivity.GetFloat();
+    }
+
+    // Speed-adaptive mode (mode == 1)
+    float lowThreshold = g_cvSpeedThresholdLow.GetFloat();
+    float highThreshold = g_cvSpeedThresholdHigh.GetFloat();
+    float sensLow = g_cvSensitivityLow.GetFloat();
+    float sensMid = g_cvSensitivityMid.GetFloat();
+    float sensHigh = g_cvSensitivityHigh.GetFloat();
+
+    if (speed < lowThreshold) {
+        return sensLow;
+    } else if (speed > highThreshold) {
+        return sensHigh;
+    }
+
+    // Mid range: smooth or stepped
+    if (!g_cvEnableSmoothTransition.GetBool()) {
+        // Stepped (legacy compat)
+        return sensMid;
+    }
+
+    // Linear interpolation: two segments (low→mid, mid→high)
+    float t = (speed - lowThreshold) / (highThreshold - lowThreshold);
+
+    if (t < 0.5f) {
+        // First half: low to mid
+        return sensLow + (sensMid - sensLow) * (t * 2.0f);
+    } else {
+        // Second half: mid to high
+        return sensMid + (sensHigh - sensMid) * ((t - 0.5f) * 2.0f);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Record fix statistics
+// ----------------------------------------------------------------------------
+void RecordFix(float preSpeed, float postSpeed, float fixedSpeed)
+{
+    g_GlobalStats.totalFixes++;
+
+    float speedLoss = preSpeed - postSpeed;
+    float speedGain = fixedSpeed - postSpeed;
+
+    g_GlobalStats.totalSpeedLoss += speedLoss;
+    g_GlobalStats.totalSpeedGain += speedGain;
+    g_GlobalStats.sampleCount++;
+
+    if (preSpeed < 500.0f) {
+        g_GlobalStats.fixesBySpeed[0]++;
+    } else if (preSpeed < 1000.0f) {
+        g_GlobalStats.fixesBySpeed[1]++;
+    } else {
+        g_GlobalStats.fixesBySpeed[2]++;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Statistics commands
+// ----------------------------------------------------------------------------
+CON_COMMAND(momsurffix_stats, "Show MomSurfFix statistics")
+{
+    Msg("========================================\n");
+    Msg("  MomSurfFix Statistics\n");
+    Msg("========================================\n");
+    Msg("Total Fixes: %d\n", g_GlobalStats.totalFixes);
+    Msg("  Low Speed  (< 500):  %d\n", g_GlobalStats.fixesBySpeed[0]);
+    Msg("  Mid Speed  (500-1k): %d\n", g_GlobalStats.fixesBySpeed[1]);
+    Msg("  High Speed (> 1k):   %d\n", g_GlobalStats.fixesBySpeed[2]);
+    Msg("----------------------------------------\n");
+    Msg("Avg Speed Loss: %.1f u/s\n", g_GlobalStats.GetAvgSpeedLoss());
+    Msg("Avg Speed Gain: %.1f u/s\n", g_GlobalStats.GetAvgSpeedGain());
+    if (g_GlobalStats.GetAvgSpeedLoss() > 0.0f) {
+        Msg("Recovery Rate:  %.1f%%\n",
+            g_GlobalStats.GetAvgSpeedGain() / g_GlobalStats.GetAvgSpeedLoss() * 100.0f);
+    }
+    Msg("========================================\n");
+}
+
+CON_COMMAND(momsurffix_reset_stats, "Reset statistics")
+{
+    g_GlobalStats.Reset();
+    Msg("[MomSurfFix] Statistics reset\n");
+}
+
+// ----------------------------------------------------------------------------
+// Detour logic
 // ----------------------------------------------------------------------------
 #ifndef THISCALL
     #define THISCALL
 #endif
 typedef int (THISCALL *TryPlayerMove_t)(void *, Vector *, CGameTrace *, float);
 
+#define MOVETYPE_NOCLIP 8
 #define MOVETYPE_LADDER 9
 
 int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
@@ -185,12 +314,12 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     if (!pPlayer || !mv) return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
 
     // ========================================================================
-    // 兼容性保护 (梯子 & 水下)
+    // Compatibility guard (ladder & water)
     // ========================================================================
     if (g_off_MoveType != -1)
     {
         unsigned char moveTypeByte = *(unsigned char *)((uintptr_t)pPlayer + g_off_MoveType);
-        if (moveTypeByte == MOVETYPE_LADDER) 
+        if (moveTypeByte == MOVETYPE_LADDER || moveTypeByte == MOVETYPE_NOCLIP)
             return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
     }
 
@@ -204,59 +333,39 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     Vector *pVel = (Vector *)((uintptr_t)mv + g_off_VecVelocity);
     Vector *pOrigin = (Vector *)((uintptr_t)mv + g_off_VecAbsOrigin);
 
-    // 1. 记录原始状态
+    // 1. Record pre-move state
     Vector preVelocity = *pVel;
     Vector preOrigin = *pOrigin;
     float preSpeedSq = preVelocity.LengthSqr();
-    
-    unsigned long *pGroundEntity = (unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
-    unsigned long hGroundEntityPre = *pGroundEntity;
 
-    // 2. 运行原版引擎
+    // 2. Run original engine
     int result = Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
 
     // ========================================================================
-    // 【智能落地优化】Smart Anti-Landing-Punch
-    // ========================================================================
-    unsigned long hGroundEntityPost = *pGroundEntity;
-
-    if (hGroundEntityPre == 0xFFFFFFFF && hGroundEntityPost != 0xFFFFFFFF && preSpeedSq > 250.0f * 250.0f)
-    {
-        // 【参数化】使用 Cvar 控制落地判定速度 (默认 100.0)
-        float landingSpeedThreshold = g_cvLandingSpeed.GetFloat();
-
-        // 垂直速度小于阈值 -> 视为滑行切出 -> 消除震动
-        // 垂直速度大于阈值 -> 视为跳跃落地 -> 保留震动
-        if (std::abs(pVel->z) < landingSpeedThreshold)
-        {
-             *pGroundEntity = 0xFFFFFFFF;
-        }
-    }
-
-    // ========================================================================
-    // 撞坡修复逻辑
+    // Ramp fix logic
     // ========================================================================
 
-    if (preSpeedSq < 250.0f * 250.0f) return result;
+    if (preSpeedSq < g_cvMinSpeed.GetFloat() * g_cvMinSpeed.GetFloat()) return result;
+
+    unsigned long *pGroundEntity = (unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
 
     float postSpeedSq = pVel->LengthSqr();
-    
-    // 【参数化】灵敏度 (默认 0.97)
-    float sensitivity = g_cvSensitivity.GetFloat();
-    if (postSpeedSq > preSpeedSq * sensitivity) return result;
 
-    // 4. 执行修复检测
+    float speed = sqrt(preSpeedSq);
+    float adaptiveSensitivity = GetAdaptiveSensitivity(speed);
+    if (postSpeedSq > preSpeedSq * adaptiveSensitivity) return result;
+
+    // 4. Perform fix detection
     IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
     CGameTrace trace;
     
     Vector endPos = preOrigin + (preVelocity * flTimeLeft);
     TracePlayerBBox(preOrigin, endPos, pPlayer, pEntity, COLLISION_GROUP_PLAYER_MOVEMENT, trace);
 
-    // 【参数化】斜坡判定阈值 (默认 0.7)
     float rampNormalZ = g_cvRampNormalZ.GetFloat();
 
-    // 只针对陡峭斜坡触发修复 (z < rampNormalZ)
-    if (trace.DidHit() && trace.plane.normal.z < rampNormalZ)
+    // Only fix steep ramps (0 <= z < rampNormalZ), exclude ceilings (z < 0)
+    if (trace.DidHit() && trace.plane.normal.z >= 0.0f && trace.plane.normal.z < rampNormalZ)
     {
         float backoff = DotProduct(preVelocity, trace.plane.normal);
         
@@ -264,19 +373,45 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
         {
             Vector fixVel = preVelocity - (trace.plane.normal * backoff);
 
-            // 【参数化】防抖偏移量 (默认 0.01)
-            float antiStutterOffset = g_cvAntiStutterOffset.GetFloat();
-
-            if (trace.plane.normal.z > 0.0f) 
-            {
-                 *pOrigin = trace.endpos + (trace.plane.normal * antiStutterOffset);
-            }
-
             *pVel = fixVel;
             *pGroundEntity = 0xFFFFFFFF;
-            
+
+            float fixedSpeed = fixVel.Length();
+
+            // Record stats
+            RecordFix(speed, sqrt(postSpeedSq), fixedSpeed);
+
+            // Fire forward
+            if (g_pOnClipVelocity && g_pOnClipVelocity->GetFunctionCount() > 0)
+            {
+                // Get client index from entity reference
+            int clientIndex = gamehelpers->ReferenceToIndex(
+                gamehelpers->EntityToReference((CBaseEntity*)pPlayer));
+
+                if (clientIndex > 0 && clientIndex <= MAXPLAYERS)
+                {
+                    // Save last fix data
+                    g_LastClipData[clientIndex].inVel[0] = preVelocity.x;
+                    g_LastClipData[clientIndex].inVel[1] = preVelocity.y;
+                    g_LastClipData[clientIndex].inVel[2] = preVelocity.z;
+                    g_LastClipData[clientIndex].planeNormal[0] = trace.plane.normal.x;
+                    g_LastClipData[clientIndex].planeNormal[1] = trace.plane.normal.y;
+                    g_LastClipData[clientIndex].planeNormal[2] = trace.plane.normal.z;
+                    g_LastClipData[clientIndex].outVel[0] = fixVel.x;
+                    g_LastClipData[clientIndex].outVel[1] = fixVel.y;
+                    g_LastClipData[clientIndex].outVel[2] = fixVel.z;
+                    g_LastClipData[clientIndex].timestamp = 0.0f;
+
+                    g_pOnClipVelocity->PushCell(clientIndex);
+                    g_pOnClipVelocity->PushArray((cell_t *)g_LastClipData[clientIndex].inVel, 3);
+                    g_pOnClipVelocity->PushArray((cell_t *)g_LastClipData[clientIndex].planeNormal, 3);
+                    g_pOnClipVelocity->PushArray((cell_t *)g_LastClipData[clientIndex].outVel, 3);
+                    g_pOnClipVelocity->Execute(nullptr);
+                }
+            }
+
             if (g_cvDebug.GetBool())
-                Msg("[MomSurfFix] FIXED! Speed: %.0f -> %.0f\n", sqrt(preSpeedSq), fixVel.Length());
+                Msg("[MomSurfFix] FIXED! Speed: %.0f -> %.0f (Sensitivity: %.3f)\n", speed, fixedSpeed, adaptiveSensitivity);
         }
     }
 
@@ -284,8 +419,10 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 }
 
 // ----------------------------------------------------------------------------
-// SDK 生命周期
+// SDK lifecycle
 // ----------------------------------------------------------------------------
+extern sp_nativeinfo_t g_Natives[];
+
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
     char conf_error[255];
@@ -321,13 +458,13 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         }
     }
 
-    // 碰撞箱偏移
+    // Hitbox offsets
     if (gamehelpers->FindSendPropInfo("CBasePlayer", "m_vecMins", &info))
         g_off_VecMins = info.actual_offset;
     if (gamehelpers->FindSendPropInfo("CBasePlayer", "m_vecMaxs", &info))
         g_off_VecMaxs = info.actual_offset;
 
-    // 兼容性偏移
+    // Compatibility offsets
     if (gamehelpers->FindSendPropInfo("CBaseEntity", "m_nWaterLevel", &info))
         g_off_WaterLevel = info.actual_offset;
     if (gamehelpers->FindSendPropInfo("CBaseEntity", "m_MoveType", &info))
@@ -378,9 +515,21 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
     }
 
     if (pCvar) {
-        g_pCVar = pCvar;       
-        ConVar_Register(0);    
+        g_pCVar = pCvar;
+        ConVar_Register(0);
     }
+
+    // Register forward
+    g_pOnClipVelocity = forwards->CreateForward("MomSurfFix_OnClipVelocity", ET_Ignore, 4, nullptr,
+        Param_Cell,   // client index
+        Param_Array,  // inVel[3]
+        Param_Array,  // planeNormal[3]
+        Param_Array   // outVel[3]
+    );
+
+    // Register natives
+    sharesys->AddNatives(myself, g_Natives);
+    sharesys->RegisterLibrary(myself, "momsurffix_ext");
 
     gameconfs->CloseGameConfigFile(conf);
     return true;
@@ -394,13 +543,67 @@ void MomSurfFixExt::SDK_OnUnload()
         delete g_pDetour;
         g_pDetour = nullptr;
     }
+
+    if (g_pOnClipVelocity)
+    {
+        forwards->ReleaseForward(g_pOnClipVelocity);
+        g_pOnClipVelocity = nullptr;
+    }
 }
 
 void MomSurfFixExt::SDK_OnAllLoaded()
 {
 }
 
+void MomSurfFixExt::LevelInit(char const *pMapName)
+{
+    g_GlobalStats.Reset();
+}
+
 bool MomSurfFixExt::QueryRunning(char *error, size_t maxlength)
 {
     return true;
 }
+
+// ============================================================================
+// Native implementations
+// ============================================================================
+static cell_t Native_GetLastClipData(IPluginContext *pContext, const cell_t *params)
+{
+    int client = params[1];
+    if (client < 1 || client > MAXPLAYERS)
+        return pContext->ThrowNativeError("Invalid client %d", client);
+
+    cell_t *inVel, *planeNormal, *outVel;
+    pContext->LocalToPhysAddr(params[2], &inVel);
+    pContext->LocalToPhysAddr(params[3], &planeNormal);
+    pContext->LocalToPhysAddr(params[4], &outVel);
+
+    for (int i = 0; i < 3; i++) {
+        inVel[i] = sp_ftoc(g_LastClipData[client].inVel[i]);
+        planeNormal[i] = sp_ftoc(g_LastClipData[client].planeNormal[i]);
+        outVel[i] = sp_ftoc(g_LastClipData[client].outVel[i]);
+    }
+
+    return 1;
+}
+
+static cell_t Native_GetFixStats(IPluginContext *pContext, const cell_t *params)
+{
+    cell_t *totalFixes, *avgLoss, *avgGain;
+    pContext->LocalToPhysAddr(params[1], &totalFixes);
+    pContext->LocalToPhysAddr(params[2], &avgLoss);
+    pContext->LocalToPhysAddr(params[3], &avgGain);
+
+    *totalFixes = g_GlobalStats.totalFixes;
+    *avgLoss = sp_ftoc(g_GlobalStats.GetAvgSpeedLoss());
+    *avgGain = sp_ftoc(g_GlobalStats.GetAvgSpeedGain());
+
+    return 1;
+}
+
+sp_nativeinfo_t g_Natives[] = {
+    {"MomSurfFix_GetLastClipData", Native_GetLastClipData},
+    {"MomSurfFix_GetFixStats",     Native_GetFixStats},
+    {NULL, NULL}
+};

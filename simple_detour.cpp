@@ -1,7 +1,7 @@
 #include "simple_detour.h"
 #include <stdio.h>
 
-// 辅助函数：修改内存保护属性
+// Helper: change memory protection
 static bool UnprotectMemory(void *addr, size_t len)
 {
     long pagesize = sysconf(_SC_PAGESIZE);
@@ -28,32 +28,32 @@ bool CSimpleDetour::Enable()
     if (m_bEnabled) return true;
     if (!m_pTarget || !m_pHook) return false;
 
-    // 1. 准备 Trampoline (原函数备份 + 跳回指令)
+    // 1. Prepare trampoline (backup original bytes + jump back)
     if (!m_pTrampoline)
     {
-        m_pTrampoline = malloc(20); // 足够存几条指令
+        m_pTrampoline = malloc(20);
         if (!m_pTrampoline) return false;
-        
-        // 允许 Trampoline 执行
+
+        // Allow trampoline execution
         UnprotectMemory(m_pTrampoline, 20);
     }
 
-    // 2. 解除目标地址保护
+    // 2. Unprotect target address
     if (!UnprotectMemory(m_pTarget, 5)) return false;
 
-    // 3. 备份原指令 (假设前5字节是完整的指令，CSGO Linux下通常是 push ebp; mov ebp, esp... 安全)
+    // 3. Backup original bytes (assume first 5 bytes are complete instructions)
     memcpy(m_OriginalBytes, m_pTarget, 5);
 
-    // 4. 写入 Trampoline 内容
-    // 复制原指令
+    // 4. Write trampoline content
+    // Copy original bytes
     memcpy(m_pTrampoline, m_OriginalBytes, 5);
-    // 写入跳回目标函数的 JMP
+    // Write JMP back to target
     uint8_t *pTrampolineJmp = (uint8_t *)m_pTrampoline + 5;
     *pTrampolineJmp = 0xE9; // JMP rel32
     uint32_t relAddrBack = (uintptr_t)m_pTarget + 5 - ((uintptr_t)pTrampolineJmp + 5);
     *(uint32_t *)(pTrampolineJmp + 1) = relAddrBack;
 
-    // 5. 修改目标函数开头为跳转到 Hook 函数
+    // 5. Patch target function to jump to hook
     uint8_t *pTarget = (uint8_t *)m_pTarget;
     *pTarget = 0xE9; // JMP rel32
     uint32_t relAddrHook = (uintptr_t)m_pHook - ((uintptr_t)pTarget + 5);

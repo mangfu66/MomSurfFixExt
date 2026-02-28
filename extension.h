@@ -10,6 +10,7 @@ public:
     virtual void SDK_OnUnload();
     virtual void SDK_OnAllLoaded();
     virtual bool QueryRunning(char *error, size_t maxlength);
+    virtual void LevelInit(char const *pMapName);
 };
 
 extern MomSurfFixExt g_MomSurfFixExt;
