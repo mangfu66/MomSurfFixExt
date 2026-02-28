@@ -76,6 +76,8 @@ jobs:
       run: |
         cp build_css/package/addons/sourcemod/extensions/*.so \
            build_csgo/package/addons/sourcemod/extensions/
+        cp build_css/package/addons/sourcemod/extensions/*.autoload \
+           build_csgo/package/addons/sourcemod/extensions/
 
     - name: Zip package
       run: |
