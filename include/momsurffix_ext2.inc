@@ -11,6 +11,8 @@ native bool MomSurfFix2_GetLastClipData(int client, float inVel[3],
 
 native bool MomSurfFix2_GetFixStats(int &totalFixes, float &avgLoss, float &avgGain);
 
+native void MomSurfFix2_ResetStats();
+
 public Extension __ext_momsurffix2 =
 {
 	name = "MomSurfFix Extension 2",
@@ -28,5 +30,6 @@ public void __ext_momsurffix2_SetNTVOptional()
 {
 	MarkNativeAsOptional("MomSurfFix2_GetLastClipData");
 	MarkNativeAsOptional("MomSurfFix2_GetFixStats");
+	MarkNativeAsOptional("MomSurfFix2_ResetStats");
 }
 #endif

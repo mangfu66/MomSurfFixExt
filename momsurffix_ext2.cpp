@@ -36,6 +36,8 @@ SDKExtension *g_pExtensionIface = &g_MomSurfFixExt2;
 
 IEngineTrace *enginetrace = nullptr;
 CGlobalVars *gpGlobals = nullptr;
+ICvar *g_pCVar = nullptr;
+typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
 extern IGameHelpers *gamehelpers;  // Defined in smsdk_ext.cpp
 
 // ============================================================================
@@ -66,6 +68,7 @@ int g_vtoff_UnlockTraceFilter   = -1;
 void OnEnableChanged(IConVar *var, const char *pOldValue, float flOldValue);
 
 ConVar g_cvEnable("momsurffix2_enable", "1", 0, "Enable Surf Bug Fix v2", OnEnableChanged);
+ConVar g_cvDebug("momsurffix2_debug", "0", 0, "Print debug info to console");
 ConVar g_cvRampBumpCount("momsurffix2_ramp_bumpcount", "8", 0, "Max bump iterations (4-16)");
 ConVar g_cvNoclipWorkaround("momsurffix2_noclip_workaround", "1", 0, "Enable noclip workaround");
 
@@ -129,6 +132,62 @@ static void DoClipVelocity(void *pGM, Vector &in, Vector &normal, Vector &out, f
     VTableCall<ClipVelocity_t>(pGM, g_vtoff_ClipVelocity)(pGM, in, normal, out, overbounce);
 }
 
+// Helper: update stats and fire forward after a ClipVelocity call
+static void TrackClipVelocity(void *pPlayer, const Vector &preVel, const Vector &postVel, const Vector &planeNormal)
+{
+    float preSpeed  = preVel.Length();
+    float postSpeed = postVel.Length();
+    float delta     = preSpeed - postSpeed;
+
+    if (fabsf(delta) < 0.01f)
+        return;
+
+    // Filter: only track surf ramps (45° to 84° slope, speed > 50)
+    // normal.z range: 0.1 to 0.71
+    if (planeNormal.z < 0.1f || planeNormal.z > 0.71f || preSpeed < 50.0f)
+        return;
+
+    // Update statistics
+    g_Stats.totalFixes++;
+    g_Stats.samples++;
+    if (delta > 0.f)
+    {
+        g_Stats.totalLoss += delta;
+    }
+    else
+    {
+        g_Stats.totalGain += -delta;
+    }
+
+    // Fire forward
+    if (!g_pOnClipVelocity || g_pOnClipVelocity->GetFunctionCount() <= 0)
+        return;
+
+    int clientIndex = gamehelpers->ReferenceToIndex(
+        gamehelpers->EntityToReference((CBaseEntity*)pPlayer));
+
+    if (clientIndex <= 0 || clientIndex > MAXPLAYERS)
+        return;
+
+    g_LastClipData[clientIndex].inVel[0] = preVel.x;
+    g_LastClipData[clientIndex].inVel[1] = preVel.y;
+    g_LastClipData[clientIndex].inVel[2] = preVel.z;
+
+    g_LastClipData[clientIndex].planeNormal[0] = planeNormal.x;
+    g_LastClipData[clientIndex].planeNormal[1] = planeNormal.y;
+    g_LastClipData[clientIndex].planeNormal[2] = planeNormal.z;
+
+    g_LastClipData[clientIndex].outVel[0] = postVel.x;
+    g_LastClipData[clientIndex].outVel[1] = postVel.y;
+    g_LastClipData[clientIndex].outVel[2] = postVel.z;
+
+    g_pOnClipVelocity->PushCell(clientIndex);
+    g_pOnClipVelocity->PushArray((cell_t *)g_LastClipData[clientIndex].inVel, 3);
+    g_pOnClipVelocity->PushArray((cell_t *)g_LastClipData[clientIndex].planeNormal, 3);
+    g_pOnClipVelocity->PushArray((cell_t *)g_LastClipData[clientIndex].outVel, 3);
+    g_pOnClipVelocity->Execute(nullptr);
+}
+
 // TracePlayerBBox(start, end, mask, collisionGroup, trace)
 typedef void (*TracePlayerBBox_t)(void*, const Vector&, const Vector&, unsigned int, int, CGameTrace&);
 static void DoTracePlayerBBox(void *pGM, const Vector &start, const Vector &end,
@@ -159,8 +218,9 @@ static inline bool CloseEnoughF(float a, float b, float eps = FLT_EPSILON_VAL)
 }
 // VectorMA: use SDK's inline version
 
-ConVar g_cvRetrace("momsurffix2_retrace", "0", 0, "Enable 27-trace retrace for stuck-on-ramp (may cause stutter, default off)");
+ConVar g_cvRetrace("momsurffix2_retrace", "1", 0, "Enable retrace for stuck-on-ramp fix (default on)");
 ConVar g_cvRetraceLen("momsurffix2_retrace_length", "0.2", 0, "Retrace offset length");
+ConVar g_cvRetraceSamples("momsurffix2_retrace_samples", "3", 0, "Retrace sample grid size (3=27 traces, 5=125 traces)");
 
 ConVar *g_pSvBounce = nullptr;
 
@@ -206,6 +266,9 @@ static int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFi
     Vector primal_velocity   = vecVelocity;
     Vector fixed_origin      = vecAbsOrigin;
     Vector new_velocity(0,0,0), end(0,0,0), dir(0,0,0), valid_plane(0,0,0);
+
+    // Track initial speed for statistics
+    float initialSpeed = vecVelocity.Length();
 
     float planes[MAX_CLIP_PLANES][3] = {};
     float allFraction = 0.f, time_left = gpGlobals->interval_per_tick, d;
@@ -257,26 +320,43 @@ static int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFi
             {
                 float ob = (valid_plane.z >= 0.7f) ? 1.f
                          : 1.f + bounceVal * (1.f - GetSurfFriction(pPlayer));
+
+                Vector preVel = vecVelocity;
                 DoClipVelocity(pThis, vecVelocity, valid_plane, vecVelocity, ob);
+                TrackClipVelocity(pPlayer, preVel, vecVelocity, valid_plane);
+
                 original_velocity = vecVelocity;
                 VectorMA(fixed_origin, g_cvRetraceLen.GetFloat(), valid_plane, fixed_origin);
             }
             else if (doRetrace &&
                      (!g_cvNoclipWorkaround.GetBool() || vecVelocity.z < -6.25f || vecVelocity.z > 0.f))
             {
-                // 5×5×5 = 125-trace retrace
-                float offsets[5] = {
-                    (float(bumpcount)*2.f) * -g_cvRetraceLen.GetFloat() * 2.f,
-                    (float(bumpcount)*2.f) * -g_cvRetraceLen.GetFloat(),
-                    0.f,
-                    (float(bumpcount)*2.f) *  g_cvRetraceLen.GetFloat(),
-                    (float(bumpcount)*2.f) *  g_cvRetraceLen.GetFloat() * 2.f,
-                };
+                // Dynamic retrace grid (3×3×3 = 27 traces, or 5×5×5 = 125 traces)
+                int samples = g_cvRetraceSamples.GetInt();
+                if (samples < 3) samples = 3;
+                if (samples > 5) samples = 5;
+
+                float *offsets = (float *)alloca(samples * sizeof(float));
+                if (samples == 3)
+                {
+                    offsets[0] = -g_cvRetraceLen.GetFloat();
+                    offsets[1] = 0.f;
+                    offsets[2] = g_cvRetraceLen.GetFloat();
+                }
+                else if (samples == 5)
+                {
+                    offsets[0] = -g_cvRetraceLen.GetFloat() * 2.f;
+                    offsets[1] = -g_cvRetraceLen.GetFloat();
+                    offsets[2] = 0.f;
+                    offsets[3] = g_cvRetraceLen.GetFloat();
+                    offsets[4] = g_cvRetraceLen.GetFloat() * 2.f;
+                }
+
                 Vector accum(0,0,0);
                 int valid_planes = 0;
                 valid_plane = vec3_origin;
 
-                for (int i=0;i<5;i++) for (int j=0;j<5;j++) for (int h=0;h<5;h++)
+                for (int i=0;i<samples;i++) for (int j=0;j<samples;j++) for (int h=0;h<samples;h++)
                 {
                     Vector off(offsets[i], offsets[j], offsets[h]);
                     Vector s(fixed_origin.x+off.x, fixed_origin.y+off.y, fixed_origin.z+off.z);
@@ -372,7 +452,11 @@ static int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFi
         {
             float ob = (planes[0][2]>=0.7f) ? 1.f : 1.f+bounceVal*(1.f-GetSurfFriction(pPlayer));
             Vector pn(planes[0][0],planes[0][1],planes[0][2]);
+
+            Vector preVel = original_velocity;
             DoClipVelocity(pThis, original_velocity, pn, new_velocity, ob);
+            TrackClipVelocity(pPlayer, preVel, new_velocity, pn);
+
             vecVelocity=new_velocity; original_velocity=new_velocity;
         }
         else
@@ -381,7 +465,10 @@ static int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFi
             for (i=0;i<numplanes;i++)
             {
                 Vector pn(planes[i][0],planes[i][1],planes[i][2]);
+                Vector preVel = original_velocity;
                 DoClipVelocity(pThis, original_velocity, pn, vecVelocity, 1.f);
+                TrackClipVelocity(pPlayer, preVel, vecVelocity, pn);
+
                 for (j=0;j<numplanes;j++)
                     if (j!=i) { Vector pj(planes[j][0],planes[j][1],planes[j][2]); if(vecVelocity.Dot(pj)<0.f) break; }
                 if (j==numplanes) break;
@@ -401,6 +488,19 @@ static int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFi
     }
 
     if (CloseEnoughF(allFraction, 0.f)) vecVelocity=vec3_origin;
+
+    // Debug output
+    if (g_cvDebug.GetBool())
+    {
+        float originalSpeed = original_velocity.Length();
+        float finalSpeed = vecVelocity.Length();
+        if (originalSpeed > 0.f && fabsf(finalSpeed - originalSpeed) > 1.f)
+        {
+            Msg("[MomSurfFix2] Speed: %.1f -> %.1f (diff: %.1f) | Bumps: %d | Blocked: %d\n",
+                originalSpeed, finalSpeed, finalSpeed - originalSpeed, bumpcount, blocked);
+        }
+    }
+
     return blocked;
 }
 
@@ -500,14 +600,50 @@ bool MomSurfFixExt2::SDK_OnLoad(char *error, size_t maxlength, bool late)
     gpGlobals = g_SMAPI->GetCGlobals();
 
     g_pDetour = new CSimpleDetour(pTryPlayerMove, (void *)Detour_TryPlayerMove);
-    UpdateDetourState();
+    if (!g_pDetour->Enable())
+    {
+        snprintf(error, maxlength, "Failed to enable detour for TryPlayerMove");
+        delete g_pDetour;
+        g_pDetour = nullptr;
+        gameconfs->CloseGameConfigFile(conf);
+        return false;
+    }
 
     // MoveHelper singleton
     void *pSingleton = nullptr;
     if (conf->GetAddress("sm_pSingleton", &pSingleton) && pSingleton)
         g_pMoveHelper = pSingleton;
 
-    // sv_bounce
+    // Get ICvar interface and register ConVars
+    // Try method 1: dlopen libvstdlib.so directly
+    void *hVStdLib = dlopen("libvstdlib_srv.so", RTLD_NOW | RTLD_NOLOAD);
+    if (!hVStdLib) hVStdLib = dlopen("libvstdlib.so", RTLD_NOW | RTLD_NOLOAD);
+
+    ICvar *pCvar = nullptr;
+    if (hVStdLib) {
+        CreateInterfaceFn factory = (CreateInterfaceFn)dlsym(hVStdLib, "CreateInterface");
+        if (factory) {
+            pCvar = (ICvar *)factory(CVAR_INTERFACE_VERSION, nullptr);
+        }
+        dlclose(hVStdLib);
+    }
+
+    // Try method 2: use gamedata CreateInterface signature
+    if (!pCvar) {
+        void *pCreateInterface = nullptr;
+        if (conf->GetMemSig("CreateInterface", &pCreateInterface) && pCreateInterface)
+        {
+            CreateInterfaceFn factory = (CreateInterfaceFn)pCreateInterface;
+            pCvar = (ICvar *)factory(CVAR_INTERFACE_VERSION, nullptr);
+        }
+    }
+
+    if (pCvar) {
+        g_pCVar = pCvar;
+        ConVar_Register(0);
+    }
+
+    // sv_bounce (after g_pCVar is initialized)
     if (g_pCVar)
         g_pSvBounce = g_pCVar->FindVar("sv_bounce");
 
@@ -606,10 +742,17 @@ static cell_t Native_GetFixStats(IPluginContext *pContext, const cell_t *params)
     return 1;
 }
 
+static cell_t Native_ResetStats(IPluginContext *pContext, const cell_t *params)
+{
+    g_Stats.Reset();
+    return 1;
+}
+
 sp_nativeinfo_t g_Natives[] =
 {
     { "MomSurfFix2_GetLastClipData", Native_GetLastClipData },
     { "MomSurfFix2_GetFixStats",     Native_GetFixStats     },
+    { "MomSurfFix2_ResetStats",      Native_ResetStats      },
     { nullptr, nullptr }
 };
 

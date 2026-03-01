@@ -120,6 +120,7 @@ def CopyFiles(src, dest, files):
 
 CopyFiles('gamedata', 'addons/sourcemod/gamedata',            ['momsurffix_fix2.games.txt'])
 CopyFiles('include',  'addons/sourcemod/scripting/include',   ['momsurffix_ext2.inc'])
+CopyFiles('cfg',      'cfg/sourcemod',                        ['momsurffix2.cfg'])
 builder.AddCopy(MomSurfFix.binary, folder_map['addons/sourcemod/extensions'])
 
 # Copy autoload file so the extension loads automatically
