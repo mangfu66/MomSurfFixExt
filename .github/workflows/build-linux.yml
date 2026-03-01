@@ -2,10 +2,10 @@ name: Build MomSurfFix2 Extension on Linux
 
 on:
   push:
-    branches: [ momsurffix2 ]
+    branches: [ main ]
     tags: [ 'v*' ]
   pull_request:
-    branches: [ momsurffix2 ]
+    branches: [ main ]
 
 jobs:
   build:
